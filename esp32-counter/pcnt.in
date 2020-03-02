@@ -1,0 +1,9 @@
+i   driver/pcnt.h
+
+f   esp_err_to_name     I	s
+f   pcnt_unit_config	P	I
+f   pcnt_get_counter_value	IP	I
+f   pcnt_counter_pause	I	I
+f   pcnt_counter_resume	I	I
+f   pcnt_counter_clear	I	I
+f   pcnt_intr_disable	I	I
