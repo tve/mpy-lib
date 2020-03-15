@@ -1,0 +1,2 @@
+#! /bin/bash
+python3 /home/src/esp32/micropython/tools/pyboard.py --device /dev/serial/by-id/usb-Sil* "$@"
