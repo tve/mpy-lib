@@ -1,14 +1,18 @@
 # Test MQTTClient in mqtt_as.py
 # This test runs in cpython using pytest. It stubs/mocks MQTTProto so the test can focus exclusively
 # on the client functionality, such as retransmissions.
+# To produce code coverage with annotated html report: pytest --cov=mqtt_as --cov-report=html
 
-import pytest
+import pytest, random
 
-from mqtt_as import MQTTClient, MQTTConfig
+import mqtt_as
+from mqtt_as import MQTTClient, MQTTConfig, MQTTMessage
 
 broker = ('192.168.0.0', 1883)
 cli_id = 'mqtt_as_tester'
 prefix = 'esp32/tests/'
+RTT    = 40 # simulated broker response time in ms
+mqtt_as._CONN_DELAY = RTT*2/1000 # set connection delay used by MQTTClient
 
 # stuff that exists in MP but not CPython
 from time import monotonic_ns
@@ -17,8 +21,18 @@ def ticks_diff(a, b): return a-b
 import asyncio
 async def sleep_ms(ms): await asyncio.sleep(ms/1000)
 
-# Fake MQTTProto
+# -----Fake MQTTProto
+
+FAIL_CLOSED = 1 # act as if socket had been closed or errored
+FAIL_DROP   = 2 # act as if socket was functional but all packets get dropped
+FAIL_SUB1   = 3 # fail subscription as if broker had refused (error code in suback)
+FAIL_SUB2   = 4 # fail subscription as if broker had used the wrong qos
+
+conn_fail  = 0  # number of consecutive connect() that should fail
+conn_calls = 0  # number of times connect() got called, to verify reconnection timing
+
 class FakeProto:
+
     def __init__(self, pub_cb, puback_cb, suback_cb, sock_cb=None):
         # Store init params
         self._pub_cb = pub_cb
@@ -31,16 +45,24 @@ class FakeProto:
         # Init public instance vars
         self.last_ack = 0 # last ACK received from broker
         self.last_req = 0 # last request sent to broker for which an ACK is expectedo
-        self.rtt = 40     # milliseconds round-trip time for a broker response
+        self.rtt = RTT    # milliseconds round-trip time for a broker response
+        self.fail = None  # current failure mode
         print("Using FakeProto")
 
     async def connect(self, addr, client_id, clean, user=None, pwd=None, ssl_params=None,
             response_ms=10*1000, keepalive=0, lw=None):
-        await asyncio.sleep(0.1) # arbitrary time to simulate connection
+        global conn_calls, conn_fail
+        conn_calls += 1
+        if conn_fail:
+            await asyncio.sleep(4*RTT/1000) # simulate connection delay
+            conn_fail -= 1
+            raise OSError(-1, "simulated connection failure")
+        await asyncio.sleep(2*RTT/1000) # simulate connection
         self._connected = True
         # simulate conn-connack round-trip
-        self.last_req = ticks_ms()-10
+        self.last_req = ticks_ms()-RTT
         self.last_ack = ticks_ms()
+        print("Connected req={} ack={}".format(self.last_req, self.last_ack))
 
     # _sleep_until calls sleep until the deadline is reached (approximately)
     async def _sleep_until(self, deadline):
@@ -50,13 +72,20 @@ class FakeProto:
     # _handle_ping_resp simulates receiving a ping response at time `when`
     async def _handle_ping_resp(self, when):
         await self._sleep_until(when)
-        def f(): self.last_ack = ticks_ms()
+        print("[pr{}]".format(ticks_ms()))
+        def f():
+            self.last_ack = ticks_ms()
+            print("[pa{}]".format(self.last_req))
         self._q.append(f)
 
     async def ping(self):
-        asyncio.get_event_loop().create_task(self._handle_ping_resp(ticks_ms()+self.rtt))
+        if self.fail == FAIL_CLOSED:
+            raise OSError(1, "simulated closed")
+        if self.fail != FAIL_DROP:
+            asyncio.get_event_loop().create_task(self._handle_ping_resp(ticks_ms()+self.rtt))
         if ticks_diff(self.last_req, self.last_ack) <= 0: # last_req <= last_ack
             self.last_req = ticks_ms()
+        print("[pi{}]".format(self.last_req))
 
     async def disconnect(self):
         await asyncio.sleep_ms(2) # let something else run to simulate write
@@ -69,28 +98,33 @@ class FakeProto:
             self.last_ack = ticks_ms()
             self._puback_cb(pid)
         self._q.append(f)
-        #print("suback now", len(self._q))
+        print("puback now", len(self._q))
 
     # _handle_pub simulates receiving a pub message
     async def _handle_pub(self, when, msg):
         await self._sleep_until(when)
         def f(): self._pub_cb(msg)
         self._q.append(f)
-        #print("pub now", when, len(self._q))
+        print("pub now", when, len(self._q))
 
     async def publish(self, msg, dup=0):
-        loop = asyncio.get_event_loop()
-        dt = 0
-        if msg.qos > 0:
-            loop.create_task(self._handle_puback(ticks_ms()+self.rtt, msg.pid))
-            dt = 2*(msg.pid&1)
-        loop.create_task(self._handle_pub(ticks_ms()+self.rtt+1-dt, msg))
+        if self.fail == FAIL_CLOSED:
+            raise OSError(1, "simulated closed")
+        if self.fail != FAIL_DROP:
+            loop = asyncio.get_event_loop()
+            dt = 0
+            if msg.qos > 0:
+                loop.create_task(self._handle_puback(ticks_ms()+self.rtt, msg.pid))
+                dt = 2*(msg.pid&1)
+            loop.create_task(self._handle_pub(ticks_ms()+self.rtt+1-dt, msg))
         if msg.qos > 0 and ticks_diff(self.last_req, self.last_ack) <= 0: # last_req <= last_ack
             self.last_req = ticks_ms()
 
     # _handle_suback simulates receiving a suback
     async def _handle_suback(self, when, pid, qos):
         await self._sleep_until(when)
+        if   self.fail == FAIL_SUB1: qos = 0x80
+        elif self.fail == FAIL_SUB2: qos = qos ^ 1
         def f():
             self.last_ack = ticks_ms()
             self._suback_cb(pid, qos)
@@ -98,7 +132,10 @@ class FakeProto:
         #print("suback now", len(self._q))
 
     async def subscribe(self, topic, qos, pid):
-        asyncio.get_event_loop().create_task(self._handle_suback(ticks_ms()+self.rtt, pid, qos))
+        if self.fail == FAIL_CLOSED:
+            raise OSError(1, "simulated closed")
+        if self.fail != FAIL_DROP:
+            asyncio.get_event_loop().create_task(self._handle_suback(ticks_ms()+self.rtt, pid, qos))
         if ticks_diff(self.last_req, self.last_ack) <= 0: # last_req <= last_ack
             self.last_req = ticks_ms()
 
@@ -111,7 +148,7 @@ class FakeProto:
         else:
             raise OSError(-1, "Connection closed")
 
-    async def isconnected(self): return self._connected
+    def isconnected(self): return self._connected
 
 # callbacks
 
@@ -136,15 +173,34 @@ def reset_cb():
     wifi_status = None
     conn_started = None
 
+cli_num = random.randrange(100000000) # add number to client id so each test
 def fresh_config():
+    global cli_num, conn_calls, conn_fail
+    conn_calls = 0
+    conn_fail = 0
     conf = MQTTConfig()
     conf.server = broker[0]
     conf.port = broker[1]
-    conf.client_id = cli_id
+    conf.client_id = "{}-{}".format(cli_id, cli_num)
+    cli_num += 1
     conf.wifi_coro = wifi_coro
     conf.subs_cb = subs_cb
     conf.connect_coro = conn_start
+    conf.response_time = (3*RTT)/1000     # response time limit in fractional seconds
+    conf.interface.disconnect()           # ensure all tests start disconnected
     return conf
+
+async def finish_test(mqc, conns=1):
+    # initiate disconnect
+    await mqc.disconnect()
+    assert mqc._proto is None
+    assert mqc._state == 2
+    assert conn_calls == conns
+    # wait a bit and ensure all tasks have finished
+    await asyncio.sleep_ms(4*RTT)
+    assert mqc._conn_keeper is None
+    print(asyncio.all_tasks())
+    assert len(asyncio.all_tasks()) == 1
 
 #----- test cases using the real MQTTproto and connecting to a real broker
 
@@ -161,44 +217,216 @@ def test_dns_lookup():
     mqc._dns_lookup()
     assert mqc._addr == broker
 
+def test_mqtt_config():
+    conf = MQTTConfig()
+    #
+    conf.foo = 'bar'
+    assert conf.foo == 'bar'
+    assert conf["foo"] == 'bar'
+    #
+    with pytest.raises(AttributeError):
+        assert conf["bar"] == 'baz'
+    with pytest.warns(DeprecationWarning):
+        conf["bar"] = 'baz'
+    with pytest.raises(AttributeError):
+        assert conf["bar"] == 'baz'
+    conf.bar = 'baz'
+    assert conf.bar == 'baz'
+    assert conf["bar"] == 'baz'
+    conf["bar"] = 'baz2'
+    assert conf.bar == 'baz2'
+    assert conf["bar"] == 'baz2'
+
+def test_set_last_will():
+    conf = MQTTConfig()
+    exception = 0
+    #
+    try:
+        conf.set_last_will("top", "mess", qos=2)
+    except ValueError:
+        exception += 1
+    assert exception == 1
+    #
+    try:
+        conf.set_last_will(None, "mess", qos=1)
+    except ValueError:
+        exception += 1
+    assert exception == 2
+    #
+    conf.set_last_will("top", "mess", qos=1)
+    assert conf.will.topic == b'top'
+    assert conf.will.message == b'mess'
+    assert conf.will.retain == False
+    assert conf.will.qos == 1
+
+def test_init_errors():
+    conf = fresh_config()
+    conf.will = "bye"
+    with pytest.raises(ValueError, match=r'.*MQTTMessage.*'):
+        mqc = MQTTClient(conf)
+    #
+    conf = fresh_config()
+    conf.will = MQTTMessage("foo", "bar")
+    conf.keepalive = 1000000
+    with pytest.raises(ValueError, match='invalid keepalive time'):
+        mqc = MQTTClient(conf)
+    #
+    conf = fresh_config()
+    conf.will = MQTTMessage("foo", "bar")
+    conf.response_time = 10
+    conf.keepalive = 10
+    with pytest.raises(ValueError, match=r'keepalive.*time'):
+        mqc = MQTTClient(conf)
+    #
+    conf = MQTTConfig()
+    with pytest.raises(ValueError, match='no server specified'):
+        mqc = MQTTClient(conf)
+    #
+    conf = fresh_config()
+    conf.port = 0
+    mqc = MQTTClient(conf)
+    assert mqc._c.port == 1883
+    #
+    conf = fresh_config()
+    conf.port = 0
+    conf.ssl_params = 1
+    mqc = MQTTClient(conf)
+    assert mqc._c.port == 8883
+
 @pytest.mark.asyncio
 async def test_connect_disconnect():
     conf = fresh_config()
+    conf.debug = 1
     mqc = MQTTClient(conf)
     mqc._MQTTProto = FakeProto
-    assert mqc._active is False
+    assert mqc._state == 0
     assert mqc is not None
     await mqc.connect()
     assert mqc._proto is not None
-    assert mqc._active is True
-    await mqc.disconnect()
-    assert mqc._proto is None
-    assert mqc._active is False
-    await asyncio.sleep_ms(100)
-    assert mqc._conn_keeper is None
+    assert mqc._state == 1
+    await asyncio.sleep_ms(5*RTT) # let new tasks settle
+    await finish_test(mqc, conns=1)
 
-@pytest.mark.asyncio
-async def test_pub_sub_qos0():
+async def connect_subscribe(topic, qos):
     conf = fresh_config()
     conf.debug = 1
-    conf.interface.disconnect()
-    #
     mqc = MQTTClient(conf)
     mqc._MQTTProto = FakeProto
     reset_cb()
     #
     await mqc.connect()
     await asyncio.sleep_ms(10) # give created tasks a chance to run
-    print("wifi status is", wifi_status)
     assert wifi_status == True
     assert conn_started == True
-    await mqc.subscribe(prefix+"qos0", 0)
+    await mqc.subscribe(topic, qos)
+    return (mqc, conf)
+
+# test a simple QoS 0 publication while everything works well
+@pytest.mark.asyncio
+async def test_pub_sub_qos0():
+    mqc, conf = await connect_subscribe(prefix+"qos0", 0)
+    #
     await mqc.publish(prefix+"qos0", "Hello0")
-    await asyncio.sleep_ms(100)
+    await asyncio.sleep_ms(5*RTT)
     assert len(msg_q) == 1
     assert msg_q[0].message == b'Hello0'
-    await mqc.disconnect()
-    await asyncio.sleep_ms(100)
-    assert mqc._conn_keeper is None
+    await finish_test(mqc)
 
+# test a simple QoS 1 publication while everything works well
+@pytest.mark.asyncio
+async def test_pub_sub_qos1():
+    mqc, conf = await connect_subscribe(prefix+"qos1", 1)
+    #
+    await mqc.publish(prefix+"qos1", "Hello1", qos=1)
+    await asyncio.sleep_ms(5*RTT)
+    assert len(msg_q) == 1
+    assert msg_q[0].message == b'Hello1'
+    await finish_test(mqc)
 
+# test a subscription that the broker refuses
+@pytest.mark.asyncio
+async def test_refused_sub():
+    mqc, conf = await connect_subscribe(prefix+"qos1", 1)
+    #
+    mqc._proto.fail = FAIL_SUB1
+    with pytest.raises(OSError):
+        await mqc.subscribe(prefix+"ref1", 0)
+    #
+    mqc._proto.fail = FAIL_SUB2
+    with pytest.raises(OSError):
+        await mqc.subscribe(prefix+"ref1", 0)
+    #
+    await finish_test(mqc)
+
+# test a QoS 1 publication while the socket drops everything, it should reconnect
+@pytest.mark.asyncio
+async def test_drop_qos1():
+    mqc, conf = await connect_subscribe(prefix+"qos1d", 0)
+    #
+    proto1 = mqc._proto
+    proto1.fail = FAIL_DROP
+    await mqc.publish(prefix+"qos1d", "Hello2", qos=1)
+    await asyncio.sleep_ms(5*RTT)
+    assert len(msg_q) >= 1
+    assert msg_q[0].message == b'Hello2'
+    assert mqc._proto != proto1 # we have reconnected in the process
+    #
+    await finish_test(mqc, conns=2)
+
+# test a QoS 1 publication while the socket fails everything, it should reconnect
+@pytest.mark.asyncio
+async def test_fail_qos1():
+    mqc, conf = await connect_subscribe(prefix+"qos1f", 0)
+    #
+    proto1 = mqc._proto
+    proto1.fail = FAIL_CLOSED
+    await mqc.publish(prefix+"qos1f", "Hello3", qos=1)
+    await asyncio.sleep_ms(5*RTT)
+    assert len(msg_q) >= 1
+    assert msg_q[0].message == b'Hello3'
+    assert mqc._proto != proto1 # we have reconnected in the process
+    #
+    await finish_test(mqc, conns=2)
+
+# test a QoS 1 subscription while the socket drops everything, it should reconnect
+@pytest.mark.asyncio
+async def test_drop_sub1():
+    mqc, conf = await connect_subscribe(prefix+"sub1x", 0)
+    #
+    proto1 = mqc._proto
+    proto1.fail = FAIL_DROP
+    await mqc.subscribe(prefix+"sub1d", 1)
+    await mqc.publish(prefix+"sub1d", "Hello4", qos=1)
+    await asyncio.sleep_ms(5*RTT)
+    assert len(msg_q) >= 1
+    assert msg_q[0].message == b'Hello4'
+    assert mqc._proto != proto1 # we have reconnected in the process
+    #
+    await finish_test(mqc, conns=2)
+
+# test a QoS 1 subscription while the socket fails everything, it should reconnect
+@pytest.mark.asyncio
+async def test_fail_sub1():
+    mqc, conf = await connect_subscribe(prefix+"sub1x", 0)
+    #
+    proto1 = mqc._proto
+    proto1.fail = FAIL_DROP
+    await mqc.subscribe(prefix+"sub1f", 1)
+    await mqc.publish(prefix+"sub1f", "Hello5", qos=1)
+    await asyncio.sleep_ms(5*RTT)
+    assert len(msg_q) >= 1
+    assert msg_q[0].message == b'Hello5'
+    assert mqc._proto != proto1 # we have reconnected in the process
+    #
+    await finish_test(mqc, conns=2)
+
+# test reconnect failing multiple times
+@pytest.mark.asyncio
+async def test_fail_reconnect():
+    mqc, conf = await connect_subscribe(prefix+"sub1x", 0)
+    #
+    global conn_fail
+    conn_fail = 2
+    mqc._proto.fail = FAIL_CLOSED
+    await asyncio.sleep_ms(15*RTT)
+    await finish_test(mqc, conns=4)
