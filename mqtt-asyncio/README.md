@@ -2,8 +2,9 @@
 
 The `mqtt_as` library implements the MQTT 3.1.1 protocol with support for
 QoS 0 and QoS 1 and using Micropython's asyncio / uasyncio.
-The implementation in this repository is a rewrite inspired by [Peter Hinch's
-version](https://github.com/peterhinch/micropython-mqtt) and has the following changes:
+The implementation in this repository is a rewrite inspired by and largely compatible with
+[Peter Hinch's version](https://github.com/peterhinch/micropython-mqtt).
+It has the following changes:
 
 1. Support sending streams of MQTT messages at QoS=1 without blocking for an ACK after each message.
    This allows streaming of data using relatively small messages at high data rates.

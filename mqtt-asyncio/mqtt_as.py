@@ -91,7 +91,7 @@ class MQTTConfig:
         self.port            = 0
         self.user            = None
         self.password        = b''
-        self.response_time   = 60  # in seconds
+        self.response_time   = 10  # in seconds
         self.keepalive       = 600 # in seconds
         self.ssl_params      = None
         self.interface       = STA_IF
@@ -120,7 +120,7 @@ class MQTTConfig:
     def set_last_will(self, topic, message, retain=False, qos=0):
         qos_check(qos)
         if not topic:
-            raise ValueError('Empty topic.')
+            raise ValueError('empty topic')
         self.will = MQTTMessage(topic, message, retain, qos)
 
 #config = MQTTConfig()
@@ -235,11 +235,9 @@ class MQTTProto:
         await self._as_write(msg)
         await self._send_str(client_id)
         if lw is not None:
-            print("send lw")
             await self._send_str(lw.topic)
             await self._send_str(lw.message)
         if user is not None:
-            print("send up")
             await self._send_str(user)
             await self._send_str(pwd)
         self.last_req = ticks_ms()
@@ -423,6 +421,7 @@ class MQTTProto:
     # messages processed internally.
     # Immediate return if no data available. Called from ._handle_msg().
     async def check_msg(self):
+        if self._sock is None: raise OSError(-1, CONN_CLOSED)
         try:
             res = self._sock.recv(1)  # Throws OSError on WiFi fail
         except OSError as e:
@@ -435,7 +434,6 @@ class MQTTProto:
         # We got something, dispatch based on message type
         op = res[0]
         if op == 0xd0:  # PINGRESP
-            self.dprint("Pong")
             await self._as_read(1)
             self.last_ack = ticks_ms()
         elif op == 0x40:  # PUBACK: remove pid from unacked_pids
@@ -470,7 +468,7 @@ class MQTTProto:
             else:
                 msg = await self._as_read(sz)
             # Dispatch to user's callback handler
-            print("dispatch pub pid=", pid, "qos=", qos)
+            #self.dprint("dispatch pub pid=", pid, "qos=", qos)
             self._pub_cb(MQTTMessage(topic, msg, bool(retained), qos, pid))
             # Send PUBACK for QoS 1 messages
             if qos == 1:
@@ -498,14 +496,14 @@ class MQTTClient():
         elif not isinstance(self._c.will, MQTTMessage):
             raise ValueError('will must be MQTTMessage')
         if self._c.keepalive >= 65536:
-            raise ValueError('invalid keepalive time')
+            raise ValueError('invalid keepalive')
         if self._c.keepalive > 0 and self._c.keepalive < self._c.response_time * 1.5:
-            raise ValueError("keepalive not >1.5x response_time")
+            raise ValueError("keepalive <1.5x response_time")
         # config server and port
         if config.port == 0:
             self._c.port = 8883 if config.ssl_params else 1883
         if config.server is None:
-            raise ValueError('no server specified')
+            raise ValueError('no server')
         # init instance vars
         self._proto = None
         self._MQTTProto = MQTTProto # reference to class, override for testing
@@ -553,13 +551,6 @@ class MQTTClient():
 #            if PYBOARD:  # Doesn't yet have STAT_CONNECTING constant
 #                while s.status() in (1, 2):
 #                    await asyncio.sleep(_CONN_DELAY)
-#            elif LOBO:
-#                i = 0
-#                while not s.isconnected():
-#                    await asyncio.sleep(_CONN_DELAY)
-#                    i += 1
-#                    if i >= 10:
-#                        break
 #            else:
             while s.status() == network.STAT_CONNECTING:  # Break out on fail or success.
                 await asyncio.sleep_ms(200)
@@ -572,18 +563,19 @@ class MQTTClient():
         new_addr = socket.getaddrinfo(self._c.server, self._c.port)
         if len(new_addr) > 0 and len(new_addr[0]) > 1:
             self._addr = new_addr[0][-1]
+        self.dprint("DNS {}->{}".format(self._c.server, self._addr))
 
     async def connect(self):
         if self._state > 1:
-            raise ValueError("cannot connect, please create a new instance")
+            raise ValueError("cannot reuse")
         self.dprint("connecting")
         # deal with wifi and dns
         if not self._c.interface.isconnected():
             await self.wifi_connect()
-            # Note the following blocks if DNS lookup occurs. Do it once to prevent
-            # blocking during later internet outage:
-            if self._state == 0:
-                self._dns_lookup()
+        # Note the following blocks if DNS lookup occurs. Do it once to prevent
+        # blocking during later internet outage:
+        if self._state == 0:
+            self._dns_lookup()
         # actually open a socket and connect
         proto = self._MQTTProto(self._c.subs_cb, self._got_puback, self._got_suback, self._c.sock_cb)
         proto.DEBUG = self._c.debug > 2
@@ -610,16 +602,14 @@ class MQTTClient():
         loop.create_task(self._keep_alive(self._proto))
         # Notify app that we're connceted and ready to roll
         loop.create_task(self._c.connect_coro(self))
-        self.dprint("connected")
+        #self.dprint("connected")
 
     async def disconnect(self):
-        self.dprint("Disconnecting")
+        self.dprint("disconnecting")
         self._state = 2 # dead - do not reconnect
         if self._proto is not None:
-            self.dprint("disconnecting")
             await self._proto.disconnect()
         self._proto = None
-        print("_state <- 2")
 
     #===== Manage PIDs and ACKs
 
@@ -630,7 +620,7 @@ class MQTTClient():
 
     # _got_puback handles a puback by removing the pid from those we're waiting for
     def _got_puback(self, pid):
-        self.dprint("puback pid=", pid)
+        #self.dprint("puback pid=", pid)
         if pid in self._unacked_pids:
             del self._unacked_pids[pid]
 
@@ -641,7 +631,6 @@ class MQTTClient():
             if self._unacked_pids[pid] == qos:
                 del self._unacked_pids[pid]
             elif qos == 0x80:
-                print("suback w/refused")
                 self._unacked_pids[pid] = OSError(-2, "refused")
             else:
                 self._unacked_pids[pid] = OSError(-2, "qos mismatch")
@@ -670,7 +659,6 @@ class MQTTClient():
                 if op == None:
                     await asyncio.sleep_ms(_POLL_DELAY)  # Let other tasks get lock
         except OSError as e:
-            print(e)
             await self._reconnect(proto, 'read')
 
     # Keep connection alive MQTT spec 3.1.2.10 Keep Alive.
@@ -696,7 +684,6 @@ class MQTTClient():
                 #print("s{}>".format(sleep_time))
                 await asyncio.sleep_ms(sleep_time)
         except Exception as e:
-            print("_keep_alive failed:", e)
             await self._reconnect(proto, 'keepalive')
 
     # _reconnect schedules a reconnection if not underway.
@@ -720,26 +707,24 @@ class MQTTClient():
     async def _keep_connected(self):
         count = 0
         while self._state == 1:
-            print("#", end='')
             if self._proto is not None:
                 # We're connected, print debug info and pause for 1 second
                 count += 1
                 if count >= 20 and self._c.debug:
                     gc.collect()
-                    print('RAM free {} alloc {}'.format(gc.mem_free(), gc.mem_alloc()))
+                    self.dprint('RAM free {} alloc {}'.format(gc.mem_free(), gc.mem_alloc()))
                     count = 0
                 await asyncio.sleep(_CONN_DELAY)
                 continue
             # we have a problem, need some form of reconnection
             if self._c.interface.isconnected():
-                self.dprint("reconnecting")
                 # wifi thinks it's connected, be optimistic and reconnect to broker
                 try:
                     await self.connect()
-                    self.dprint('Reconnect OK!')
+                    self.dprint('reconnect OK!')
                     continue
                 except OSError as e:
-                    self.dprint('Error in MQTT reconnect.', e)
+                    self.dprint('error in MQTT reconnect.', e)
                     # Can get ECONNABORTED or -1. The latter signifies no or bad CONNACK received.
                 # connecting to broker didn't work, disconnect Wifi
                 if self._proto is not None: # defensive coding -- not sure this can be triggered
@@ -749,12 +734,11 @@ class MQTTClient():
                 continue # not falling through to force recheck of while condition
             # reconnect to Wifi
             try:
-                self.dprint("Wifi reconnecting")
                 await self.wifi_connect()
             except OSError as e:
-                self.dprint('Error in Wifi reconnect.', e)
+                self.dprint('error in Wifi reconnect.', e)
                 await asyncio.sleep(_CONN_DELAY)
-        self.dprint('Disconnected, exited _keep_connected')
+        #self.dprint('Disconnected, exited _keep_connected')
         self._conn_keeper = None
 
     async def subscribe(self, topic, qos=0):
@@ -772,7 +756,7 @@ class MQTTClient():
             except OSError as e:
                 if e.errno == -2:
                     raise OSError(-1, "subscribe failed:" + e.strerror)
-                self.dprint("Subscribe:", e)
+                #self.dprint("Subscribe:", e)
             await self._reconnect(proto, 'sub')
 
     # publish - simple version that doesn't support overlapping/streaming, i.e., immediately blocks
@@ -818,7 +802,7 @@ class MQTTClient():
         if qos:
             self._unacked_pids[pid] = message
         while True:
-            print("pub begin for pid=", pid)
+            self.dprint("pub begin for pid=", pid)
             # first we need a connection
             while self._proto is None:
                 await asyncio.sleep(_CONN_DELAY)
@@ -833,7 +817,6 @@ class MQTTClient():
                 try:
                     await proto.publish(m, 1)
                 except OSError as e:
-                    self.dprint("Publish: {}", e)
                     await self._reconnect(proto, 'pub')
                     continue
             # now publish the new packet on the same connection
@@ -841,16 +824,13 @@ class MQTTClient():
             try:
                 await proto.publish(message, dup)
             except OSError as e:
-                self.dprint("Publish: {}", e)
                 await self._reconnect(proto, 'pub')
                 continue
             # if there is an async packet outstanding wait for an ack
             if self._prev_pub is not None:
                 try:
-                    self.dprint("awaiting prev", self._prev_pub.pid)
                     await self._await_pid(self._prev_pub.pid)
                 except OSError as e:
-                    self.dprint("Publish: {}", e)
                     await self._reconnect(proto, 'pub')
                     continue
             # got ACK! prev packet is done and new one becomes prev if qos>0 and async, or
@@ -867,5 +847,4 @@ class MQTTClient():
                 await self._await_pid(message.pid)
                 return
             except OSError as e:
-                self.dprint("Publish: {}", e)
                 await self._reconnect(proto, 'pub')
