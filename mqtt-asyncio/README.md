@@ -2,26 +2,30 @@
 
 The `mqtt_as` library implements the MQTT 3.1.1 protocol with support for
 QoS 0 and QoS 1 and using Micropython's asyncio / uasyncio.
-The implementation in this repository is forked from [Peter Hinch's
-version](https://github.com/peterhinch/micropython-mqtt) and has the following improvements:
+The implementation in this repository is a rewrite inspired by [Peter Hinch's
+version](https://github.com/peterhinch/micropython-mqtt) and has the following changes:
 
 1. Support sending streams of MQTT messages at QoS=1 without blocking for an ACK after each message.
    This allows streaming of data using relatively small messages at high data rates.
-2. Eliminate retransmission of messages on an existing TCP connection, which is totally pointless
+2. Completely reorganize the implementation to facilitate automated testing and to enable the
+   implementation of the streaming. Specifically, split
+   the implementation such that a lower-level class (`MQTTProto`) implements the protocol on a
+   single socket and a higher-level class (`MQTTClient`) implements the reconnection and
+   retransmission logic.
+3. Write automated tests of the lower-level class running on an Micropython board testing against a
+   real broker to ensure that the protocol works and that failures are reported appropriately. Then
+   write automated tests of the higher-level class running on linux and using a simulated
+   lower-class to test failures and retransmissions.
+4. Eliminate retransmission of messages on an existing TCP connection, which is totally pointless
    given that TCP implements a reliable stream. Instead, if no ACK is received the retransmission
    uses a fresh connection from the get-go.
-3. Eliminate using a fresh PID (packet ID) when retransmitting a message on a fresh TCP connection
+5. Eliminate using a fresh PID (packet ID) when retransmitting a message on a new TCP connection
    to avoid unnecessary duplicate packets. The original implementation used a fresh PID due to a bug
    that made it look like Mosquitto wasn't accepting the retransmission.
-4. When reconnecting first do so at the TCP level without tearing Wifi down to minimize the
+6. When reconnecting first do so at the TCP level without tearing Wifi down to minimize the
    disruption, only disconnect/reconnect Wifi if the TCP reconnect doesn't work.
-5. Add tests to exercise the various disconnect/reconnect strategies to ensure they work as
-   designed.
-6. Eliminate some race conditions (missing self.lock).
-7. Eliminate testing for internet connectivity when connecting: defeats local MQTT brokers.
-8. Eliminate `clean_init` config param and only use clean config param, see below.
-7. Restructure the code to avoid subclassing and to clearly delineate the role of the lower-level
-   class (it is a pure protocol implementation on a single TCP connection).
+7. Eliminate `clean_init` config param and only use clean config param, see below.
+8. Structure imports and work-arounds such that `mqtt_as` can be used in CPython.
 
 ## Streaming data using small messages
 
@@ -34,11 +38,11 @@ spec](http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398
 When sending messages using `publish()` the default is to send the message and then block to wait
 for an MQTT-level ACK. This wait has a significant impact on rate at which a stream of small
 messages can be transmitted (easily 10x).
-The implementation here adds a `sync` parameter to `publish()` which, if set
-to false, omits the wait allowing the application explicitly verify whether an ACK has been received
-later.
+The implementation here adds a `sync` parameter to `publish()` which, if set to `False`, omits
+the wait allowing the application to explicitly verify whether an ACK has been received later.
 At a high level there are two strategies an application can use to send a stream of N messages:
 1. Send the first N-1 messages using `sync=False` and then send the 
+**FIXME**
 
 ## How to use the clean session flag
 
@@ -57,6 +61,40 @@ As a result the two primary modes of operation should be:
    software version is loaded in order to avoid having incorrect subscriptions active that are no
    longer relevant. In order to achieve that the client should connect with `clean=True`,
    immediately disconnect, and then reconnect with `clean=False` and proceed.
+
+## Testing strategy
+
+The `mqtt_as` library uses a multi-level strategy for testing. Some tests are manual, some are
+automated and run on linux, some run on an esp32, some run against a simulated broker and some run
+against a real broker. Life is sometimes complicated...
+
+`test_client.py` contains high-level tests for the `MQTTClient` class. If run using `pytest
+test_client.py` these tests use a simulated broker (note that the `pytest-timeout` and
+`pytest-asyncio` plugins are required). These tests check basic functioning, then check failure
+handling (retransmission if qos>0), and finally check async publishing. The async publishing tests
+can also be run against a real broker, for this purpose fix-up the broker details at the start of
+the file, set `FAKE=False` near the end of the file, and run `pytest -k async_pub test_client.py`.
+
+`test_proto.py` contains lower-level tests for the `MQTTProto` class to ensure that it handles
+socket operations correctly and formats and parses MQTT messages properly. To run these tests against
+a real broker fix-up the broker info at the start of the file and run `pytest test_proto.py`. These
+tests can also be run on a Micropython board to ensure that the idiosyncracies of the socket
+interface there are handled correctly. For this purpose start by manually connecting your board to
+Wifi, then run something like `pyboard <options> -f cp mqtt_as.py :` followed by
+`pyboard <options> test_proto.py`.
+
+With the broker info fixed-up in `test_proto.py` it is also possible to run
+`pytest --cov=mqtt_as --cov-report=html` to run all tests and produce a code coverage report in
+`./htmlcov`. As of this writing the coverage is in the high eighties percent.
+
+`test-tcp.py` is a low-level test that can be run manually on a board to test the behavior of the
+socket library and networking stack. It requires simulating failures manually for example using
+iptables on the broker end to block the flow of packets. The results then require manual
+interpretation, but the end goal is to ensure that the behavior of socket operations under failure
+is understood. Comments at the start of the file capture some of the observations made on the esp32.
+
+`test-clean.py` is also a manual test that was used to ascertain the behavior of the clean flag when
+creating a session. It is not useful as a unit test and kept for posteriority...
 
 # README from the original version
 
