@@ -8,11 +8,18 @@
 #except:
 #    pass
 
+import sys
 from mqtt_as import MQTTProto, MQTTMessage, MQTTConfig
 
 broker = ('192.168.0.14', 1883)
 cli_id = 'mqtt_as_tester'
 prefix = 'esp32/tests/'
+
+try:
+    import pytest
+    pytestmark = pytest.mark.asyncio
+except:
+    pass
 
 try:
     from time import ticks_ms, ticks_diff
@@ -181,7 +188,7 @@ async def test_auth_fail():
     # connect no password
     exc = 0
     try:
-        await mqc.connect(broker, cli_id, True, user="foo", pwd=None)
+        await mqc.connect(broker, cli_id, True, user="foo", pwd="")
     except OSError:
         exc += 1
     assert exc == 0 # FIXME FIXME need to fix broker auth to test this!
