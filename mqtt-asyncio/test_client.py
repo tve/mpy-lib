@@ -299,7 +299,7 @@ def test_init_errors():
     conf = fresh_config()
     conf.will = MQTTMessage("foo", "bar")
     conf.keepalive = 1000000
-    with pytest.raises(ValueError, match='invalid keepalive time'):
+    with pytest.raises(ValueError, match='invalid keepalive'):
         mqc = MQTTClient(conf)
     #
     conf = fresh_config()

@@ -1,6 +1,7 @@
 # Benchmark MQTTClient in mqtt_as.py
 # More specifically, verify that the streaming pub produces the desired results.
-
+# Run this benchmark using cpython or micropython, a few changes commenting out pytest markers let
+# it run under pytest as well but the only benefit is if assertions fail to see details.
 
 import random, sys
 try:
@@ -22,7 +23,7 @@ try:
     import uasyncio as asyncio
 except:
     from time import monotonic_ns
-    def ticks_ms(): return monotonic_ns() // 1000000
+    def ticks_ms(): return int(monotonic_ns() // 1000000)
     def ticks_diff(a, b): return a-b
     import asyncio
 #async def sleep_ms(ms): await asyncio.sleep(ms/1000)

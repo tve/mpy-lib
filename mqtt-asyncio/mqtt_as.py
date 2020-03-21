@@ -123,7 +123,7 @@ class MQTTConfig:
             raise ValueError('empty topic')
         self.will = MQTTMessage(topic, message, retain, qos)
 
-#config = MQTTConfig()
+config = MQTTConfig()
 
 def qos_check(qos):
     if not (qos == 0 or qos == 1):
@@ -366,19 +366,23 @@ class MQTTProto:
 
     # publish writes a publish message onto the current socket. It raises an OSError on failure.
     # If qos==1 then a pid must be provided.
+    # msg.topic and msg.message must be byte arrays, or equiv.
     async def publish(self, msg, dup=0):
         # calculate message length
-        if type(msg.message) is list:
-            mlen = sum(len(m) for m in msg.message)
-        else:
-            mlen = len(msg.message)
+        mlen = len(msg.message)
         sz = 2 + len(msg.topic) + mlen
         if msg.qos > 0:
             sz += 2 # account for pid
         if sz >= 2097152:
             raise ValueError('message too long')
-        # construct packet header
-        pkt = bytearray(4+2+len(msg.topic)+2)
+        # construct packet: if possible, put everything into a single large bytearray so a single
+        # socket send call can be made resulting in a single packet.
+        hdrlen = 4+2+len(msg.topic)+2
+        single = hdrlen + mlen <= 1440 # slightly conservative MSS
+        if single:
+            pkt = bytearray(hdrlen+mlen)
+        else:
+            pkt = bytearray(hdrlen)
         pkt[0] = 0x30 | msg.qos << 1 | msg.retain | dup << 3
         l = self._varint(pkt, 1, sz)
         struct.pack_into("!H", pkt, l, len(msg.topic))
@@ -390,16 +394,14 @@ class MQTTProto:
             l += 2
         # send header and body
         async with self._lock:
-            await self._as_write(pkt, l)
-            if type(msg.message) is list:
-                for m in msg.message:
-                    if isinstance(m, str): m = m.encode()
-                    await self._as_write(m)
+            if single:
+                pkt[l:] = msg.message
+                await self._as_write(pkt, l+mlen)
             else:
+                await self._as_write(pkt, l)
                 await self._as_write(msg.message)
         if msg.qos > 0 and ticks_diff(self.last_req, self.last_ack) <= 0: # last_req <= last_ack
             self.last_req = ticks_ms()
-
 
     # subscribe sends a subscription message.
     async def subscribe(self, topic, qos, pid):
@@ -547,7 +549,8 @@ class MQTTClient():
         else:
             s.active(True)
             #self.dprint("Connecting, li=", self._c.listen_interval)
-            s.connect(self._c.ssid, self._c.wifi_pw, listen_interval=self._c.listen_interval)
+            s.connect(self._c.ssid, self._c.wifi_pw)
+            #s.connect(self._c.ssid, self._c.wifi_pw, listen_interval=self._c.listen_interval)
 #            if PYBOARD:  # Doesn't yet have STAT_CONNECTING constant
 #                while s.status() in (1, 2):
 #                    await asyncio.sleep(_CONN_DELAY)
@@ -658,6 +661,7 @@ class MQTTClient():
                 op = await proto.check_msg()  # Immediate None return if no message
                 if op == None:
                     await asyncio.sleep_ms(_POLL_DELAY)  # Let other tasks get lock
+                    #await asyncio.sleep_ms(100)  # Longer delay to use mqrepl
         except OSError as e:
             await self._reconnect(proto, 'read')
 
@@ -712,7 +716,7 @@ class MQTTClient():
                 count += 1
                 if count >= 20 and self._c.debug:
                     gc.collect()
-                    self.dprint('RAM free {} alloc {}'.format(gc.mem_free(), gc.mem_alloc()))
+                    #self.dprint('RAM free {} alloc {}'.format(gc.mem_free(), gc.mem_alloc()))
                     count = 0
                 await asyncio.sleep(_CONN_DELAY)
                 continue

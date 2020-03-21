@@ -98,14 +98,15 @@ async def test_simple():
     assert pub_q[0].qos == 1
     assert 125 in puback_set, "Error: did not receive puback @qos=1"
     pub_q = []
-    # publish to above topic using QoS=1 and a list of messages
-    longm2 = "Hello this is a very very long message indeed, it's more than a couple bytes. "
-    longm2 = [longm2, longm2, longm2, longm2]
-    await mqc.publish(MQTTMessage(topic, longm2, qos=1, pid=126))
+    # publish to above topic using QoS=1 and a long message
+    longm = bytearray(2000)
+    for i in range(len(longm)):
+        longm[i] = i & 0xff
+    await mqc.publish(MQTTMessage(topic, longm, qos=1, pid=126))
     await wait_msg(mqc, 3)
     assert len(pub_q) == 1, "Error: did not receive mirror pub @qos=1"
     assert pub_q[0].topic == topic.encode()
-    assert pub_q[0].message == longm.encode()
+    assert pub_q[0].message == longm
     assert pub_q[0].retain == 0
     assert pub_q[0].qos == 1
     assert 126 in puback_set, "Error: did not receive puback @qos=1"

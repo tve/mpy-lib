@@ -17,6 +17,8 @@ It has the following changes:
    real broker to ensure that the protocol works and that failures are reported appropriately. Then
    write automated tests of the higher-level class running on linux and using a simulated
    lower-class to test failures and retransmissions.
+4. Ensure that messages that normally fit into a TCP packet get sent as a single packet on the wire
+   to reduce overall overhead.
 4. Eliminate retransmission of messages on an existing TCP connection, which is totally pointless
    given that TCP implements a reliable stream. Instead, if no ACK is received the retransmission
    uses a fresh connection from the get-go.
@@ -38,7 +40,7 @@ spec](http://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html#_Toc398
 
 When sending messages using `publish()` the default is to send the message and then block to wait
 for an MQTT-level ACK. This wait has a significant impact on rate at which a stream of small
-messages can be transmitted (easily 10x).
+messages can be transmitted.
 The implementation here adds a `sync` parameter to `publish()` which, if set to `False`, omits
 the wait allowing the application to explicitly verify whether an ACK has been received later.
 At a high level there are two strategies an application can use to send a stream of N messages:
