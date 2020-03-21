@@ -13,6 +13,20 @@ def unique_id(): return b'\xbe\xef\xf0\x0d'
 async def async_sleep_ms(ms): await asyncio.sleep(ms/1000)
 asyncio.sleep_ms = async_sleep_ms
 
+class StreamReadWriter:
+    def __init__(self, sr, sw):
+        self.sr = sr
+        self.sw = sw
+    async def read(self, n): return await self.sr.read(n)
+    def write(self, b): self.sw.write(b)
+    async def drain(self): await self.sw.drain()
+    def close(self): self.sw.close()
+    async def wait_closed(self): await self.sw.wait_closed()
+
+async def open_connection(addr):
+    (sr, sw) = await asyncio.open_connection(addr[0], addr[1])
+    return StreamReadWriter(sr, sw)
+
 class __interface:
     def __init__(self): self.connected = False
     def connect(self, ssid, pwd, listen_interval=3): self.connected = True
