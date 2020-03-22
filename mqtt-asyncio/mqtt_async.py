@@ -1,5 +1,4 @@
-# mqtt_as.py MQTT implementation for MicroPython using the "new" uasyncio
-# built into MP in 2020.
+# mqtt_async.py MQTT implementation for MicroPython using the "new" uasyncio built into MP in 2020.
 # Copyright © 2020 by Thorsten von Eicken.
 #
 # Loosely based on a version by Peter Hinch
@@ -81,7 +80,7 @@ class MQTTConfig:
         self.clean           = False
         self.max_repubs      = 4
         self.will            = None             # last will message, must be MQTTMessage
-        self.subs_cb         = lambda *_: None  # callback on subscription success?
+        self.sub_cb          = lambda *_: None  # callback when message arrives for a subscription
         self.wifi_coro       = None             # notification when wifi connects/disconnects
         self.connect_coro    = None             # notification when a MQTT connection starts
         self.ssid            = None
@@ -93,6 +92,7 @@ class MQTTConfig:
     # support map-like access for backwards compatibility
     def __getitem__(self, key):
         return getattr(self, key)
+    # support map-like access for backwards compatibility
     def __setitem__(self, key, value):
         if not hasattr(self, key):
             warn("MQTTConfig.{} ignored".format(key), DeprecationWarning)
@@ -136,9 +136,9 @@ class MQTTProto:
     # __init__ creates a new connection based on the config.
     # The list of init params is lengthy but it clearly spells out the dependencies/inputs.
     # The _cb parameters are for publish, puback, and suback packets.
-    def __init__(self, pub_cb, puback_cb, suback_cb, pingresp_cb, sock_cb=None):
+    def __init__(self, sub_cb, puback_cb, suback_cb, pingresp_cb, sock_cb=None):
         # Store init params
-        self._pub_cb = pub_cb
+        self._sub_cb = sub_cb
         self._puback_cb = puback_cb
         self._suback_cb = suback_cb
         self._pingresp_cb = pingresp_cb
@@ -395,8 +395,8 @@ class MQTTProto:
             else:
                 msg = await self._as_read(sz)
             # Dispatch to user's callback handler
-            #self.dprint("dispatch pub pid=", pid, "qos=", qos)
-            self._pub_cb(MQTTMessage(topic, msg, bool(retained), qos, pid))
+            self.dprint("dispatch pub", topic, "pid=", pid, "qos=", qos)
+            await self._sub_cb(topic, msg, bool(retained), qos)
             # Send PUBACK for QoS 1 messages
             if qos == 1:
                 pkt = bytearray(b"\x40\x02\0\0")
@@ -507,7 +507,7 @@ class MQTTClient():
         if self._state == 0:
             self._dns_lookup()
         # actually open a socket and connect
-        proto = self._MQTTProto(self._c.subs_cb, self._got_puback, self._got_suback,
+        proto = self._MQTTProto(self._c.sub_cb, self._got_puback, self._got_suback,
                 self._got_pingresp, self._c.sock_cb)
         proto.DEBUG = self._c.debug > 2
         # FIXME: need to use a timeout here!

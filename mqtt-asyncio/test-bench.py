@@ -1,4 +1,4 @@
-# Benchmark MQTTClient in mqtt_as.py
+# Benchmark MQTTClient in mqtt_async.py
 # More specifically, verify that the streaming pub produces the desired results.
 # Run this benchmark using cpython or micropython, a few changes commenting out pytest markers let
 # it run under pytest as well but the only benefit is if assertions fail to see details.
@@ -10,11 +10,10 @@ try:
 except:
     pass
 
-import mqtt_as
-from mqtt_as import MQTTClient, MQTTConfig, MQTTMessage
+from mqtt_async import MQTTClient, MQTTConfig, MQTTMessage
 
 broker = ('192.168.0.14', 1883)
-cli_id = 'mqtt_as_tester'
+cli_id = 'mqtt_async_tester'
 prefix = 'esp32/tests/'
 
 # stuff that exists in MP but not CPython
