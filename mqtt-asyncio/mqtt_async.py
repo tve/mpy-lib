@@ -26,13 +26,10 @@ try:
     gc.collect()
     from machine import unique_id
     gc.collect()
-    def warn(msg, cat=None, stacklevel=1):
-        print("%s: %s" % ("Warning" if cat is None else cat.__name__, msg))
     import network
     STA_IF = network.WLAN(network.STA_IF)
     gc.collect()
-    coro_type = type((lambda: (yield)))
-    def is_awaitable(f): return type(f) == coro_type
+    def is_awaitable(f): return f.__class__.__name__ == 'generator'
 except:
     # Imports used with CPython (moved to another file so they don't appear on MP HW)
     from cpy_fix import *
@@ -418,7 +415,8 @@ class MQTTProto:
             log.debug("dispatch pub %s pid=%s qos=%d", topic, pid, qos)
             #t1 = ticks_ms()
             cb = self._subs_cb(topic, msg, bool(retained), qos)
-            if is_awaitable(cb): await cb # handle _subs_cb being coro
+            if is_awaitable(cb):
+                await cb # handle _subs_cb being coro
             #t2 = ticks_ms()
             # Send PUBACK for QoS 1 messages
             if qos == 1:

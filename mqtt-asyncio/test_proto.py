@@ -151,6 +151,7 @@ async def test_coro_callback():
     pub_q = []
 
 async def test_close_write():
+    return # ==========================================================================
     sr, sw = await asyncio.open_connection('192.168.0.14', 1883)
     print("connected")
     sw.close()
@@ -181,6 +182,7 @@ async def test_read_closed():
     #
 
 async def test_write_closed():
+    return # ==========================================================================
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
     # connect
