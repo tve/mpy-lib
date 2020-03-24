@@ -10,6 +10,8 @@
 
 import sys
 from mqtt_async import MQTTProto, MQTTMessage, MQTTConfig
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 broker = ('192.168.0.14', 1883)
 cli_id = 'mqtt_as_tester'
@@ -38,8 +40,10 @@ except:
 # callback handlers
 
 pub_q = []
-def got_pub(msg):
-    pub_q.append(msg)
+async def got_pub_coro(topic, msg, retain, qos):
+    pub_q.append(MQTTMessage(topic, msg, retain, qos))
+def got_pub(topic, msg, retain, qos):
+    pub_q.append(MQTTMessage(topic, msg, retain, qos))
 
 pingresp = False
 def got_pingresp():
@@ -66,7 +70,6 @@ async def wait_msg(mqc, op):
 async def test_simple():
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect
     await mqc.connect(broker, cli_id, True)
     t0 = mqc.last_ack
@@ -126,25 +129,44 @@ async def test_simple():
     await mqc.disconnect()
     #
 
+async def test_coro_callback():
+    global pub_q, puback_set, suback_map
+    mqc = MQTTProto(got_pub_coro, got_puback, got_suback, got_pingresp)
+    # connect
+    await mqc.connect(broker, cli_id, True)
+    # subscribe at QoS=0
+    topic = prefix + 'mirror'
+    await mqc.subscribe(topic, 0, 123)
+    await wait_msg(mqc, 9)
+    assert 123 in suback_map, "Error: did not receive suback @qos=0"
+    assert suback_map[123] == 0, "Error: subscribe rejected @qos=0"
+    # publish to above topic using QoS=0
+    await mqc.publish(MQTTMessage(topic, "hello55"))
+    await wait_msg(mqc, 3)
+    assert len(pub_q) == 1, "Error: did not receive mirror pub @qos=0"
+    assert pub_q[0].topic == topic.encode()
+    assert pub_q[0].message == "hello55".encode()
+    assert pub_q[0].retain == 0
+    assert pub_q[0].qos == 0
+    pub_q = []
+
 async def test_close_write():
-    return # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! broken in MP!
     sr, sw = await asyncio.open_connection('192.168.0.14', 1883)
     print("connected")
     sw.close()
     await sw.wait_closed()
     print("closed")
-    #try:
-    with pytest.raises(ConnectionResetError):
+    try:
+    #with pytest.raises(ConnectionResetError):
         sw.write(b"hello")
         await sw.drain()
         assert True == False, "Error: drain on closed socket didn't raise"
-    #except OSError as e:
-    #    print("Got OSError:", e)
+    except OSError as e:
+        print("Got OSError:", e)
 
 async def test_read_closed():
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect
     await mqc.connect(broker, cli_id, True)
     # send garbage to cause the broker to close socket
@@ -159,10 +181,8 @@ async def test_read_closed():
     #
 
 async def test_write_closed():
-    return # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! broken in MP!
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect
     await mqc.connect(broker, cli_id, True)
     # explicitly close the socket
@@ -180,7 +200,6 @@ async def test_write_closed():
 
 async def test_open_fail():
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect
     #with pytest.raises(OSError):
     print("Test bad port")
@@ -189,7 +208,7 @@ async def test_open_fail():
         assert True == False, "Error: write on closed socket returned"
     except OSError as e:
         print(e)
-        assert e.args[0] == 104
+        assert e.args[0] == 111 # connection refused
     if False: # the following takes a while if enabled...
         print("Test bad host")
         try:
@@ -208,11 +227,9 @@ async def test_last_will():
     conf.set_last_will(lw_topic, "bye")
     # connection 1 with last will
     conn1 = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    conn1.DEBUG=1
     await conn1.connect(broker, cli_id, True, keepalive=60, lw=conf.will)
     # connection 2 with subscription
     conn2 = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    conn2.DEBUG=1
     await conn2.connect(broker, cli_id+"-2", True)
     # subscribe to last will topic
     await conn2.subscribe(lw_topic, 0, 123)
@@ -238,7 +255,6 @@ async def test_last_will():
 async def test_auth_fail():
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect no password
     exc = 0
     try:
@@ -253,7 +269,6 @@ async def test_auth_fail():
 async def test_auth_succ():
     global pub_q, puback_set, suback_map
     mqc = MQTTProto(got_pub, got_puback, got_suback, got_pingresp)
-    mqc.DEBUG=1
     # connect with password
     await mqc.connect(broker, cli_id, True, user="foo", pwd="bar")
     assert mqc.last_ack != 0

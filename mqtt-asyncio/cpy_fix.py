@@ -10,6 +10,9 @@ from warnings import warn
 
 def const(x): return x
 def unique_id(): return b'\xbe\xef\xf0\x0d'
+import inspect
+def is_awaitable(f): return inspect.isawaitable(f)
+
 async def async_sleep_ms(ms): await asyncio.sleep(ms/1000)
 asyncio.sleep_ms = async_sleep_ms
 

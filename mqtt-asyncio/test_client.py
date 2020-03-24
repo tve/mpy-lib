@@ -105,7 +105,7 @@ class FakeProto:
         await self._sleep_until(when)
         def f(): self._pub_cb(msg)
         self._q.append(f)
-        #print("pub", len(self._q))
+        print("pub", len(self._q))
 
     async def publish(self, msg, dup=0):
         if self.fail == FAIL_CLOSED:
@@ -125,6 +125,7 @@ class FakeProto:
                 dt = 2*(msg.pid&1)
             print("Sched pid={} at {}".format(msg.pid, now+self.rtt+1-dt-t0))
             loop.create_task(self._handle_pub(now+self.rtt+1-dt, msg))
+            await asyncio.sleep_ms(1) # ensure the above _handle_pubs start their wait now
 
     # _handle_suback simulates receiving a suback
     async def _handle_suback(self, when, pid, qos):
@@ -146,7 +147,7 @@ class FakeProto:
     async def read_msg(self):
         while self._connected:
             if len(self._q) > 0:
-                #print("check_msg pop", len(self._q))
+                print("check_msg pop", len(self._q))
                 self._q.pop(0)()
                 return
             await asyncio.sleep_ms(10)
@@ -248,8 +249,7 @@ def test_mqtt_config():
     #
     with pytest.raises(AttributeError):
         assert conf["bar"] == 'baz'
-    with pytest.warns(DeprecationWarning):
-        conf["bar"] = 'baz'
+    conf["bar"] = 'baz'
     with pytest.raises(AttributeError):
         assert conf["bar"] == 'baz'
     conf.bar = 'baz'
