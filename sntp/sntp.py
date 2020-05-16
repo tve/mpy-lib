@@ -76,7 +76,7 @@ class SNTP:
         self._poll_task = None
 
     def start(self):
-        self._poll_task = asyncio.create_task(self._poller())
+        self._poll_task = asyncio.Loop.create_task(self._poller())
 
     async def stop(self):
         if self._poll_task is not None:
@@ -154,37 +154,43 @@ class SNTP:
     async def _poller(self):
         self._status = 0
         while True:
-            print("\nperforming NTP query")
+            #print("\nperforming NTP query")
             try:
                 self.status = (self._status << 1) & 0xFFFF
                 (delay_us, step_us) = await self._poll()
                 if step_us > self._max_step or -step_us > self._max_step:
-                    print(time.localtime())
+                    # print(time.localtime())
                     (tgt_s, tgt_us) = divmod(time.time_us() + step_us, 1000000)
-                    log.debug("stepping to %s", time.localtime(tgt_s))
+                    log.warning("stepping to %s", time.localtime(tgt_s))
                     settime(tgt_s, tgt_us)
-                    print(time.localtime())
+                    # print(time.localtime())
                 else:
-                    log.debug("adjusting by %dus (delay=%dus)", step_us, delay_us)
+                    lvl = logging.DEBUG if abs(step_us) < 10000 else logging.INFO
+                    log.log(lvl, "adjusting by %dus (delay=%dus)", step_us, delay_us)
                     adjtime(step_us)
                 self.status |= 1
-                await asyncio.sleep(4)
+                await asyncio.sleep(61)
             except asyncio.TimeoutError:
-                log.info("timeout")
+                log.warning("%s timed out", self._host)
                 if (self._status & 0x7) == 0:
                     # Three failures in a row, force fresh DNS look-up
                     self.sock = None
                     await asyncio.sleep(11)
             except OSError as e:
                 # Most likely DNS lookup failure
-                log.info("%s", e)
+                log.warning("%s: %s", self._host, e)
                 self.sock = None
                 await asyncio.sleep(11)
             except Exception as e:
-                log.warning("%s", e)
+                log.error("%s", e)
                 print_exception(e)
                 await asyncio.sleep(121)
 
+def start(mqtt, config):
+    from utime import tzset
+    tzset(config.pop("zone", "UTC+0"))
+    ss = SNTP(**config)
+    ss.start()
 
 if __name__ == "__main__":
 
@@ -193,6 +199,7 @@ if __name__ == "__main__":
     async def runner():
         ss = SNTP(host='192.168.0.1')
         ss.start()
-        await asyncio.sleep(300)
+        while True:
+            await asyncio.sleep(300)
 
     asyncio.run(runner())
