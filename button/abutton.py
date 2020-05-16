@@ -82,8 +82,14 @@ class Pushbutton:
         #
         while True:
             state = raw()
-            if state is False and self.state is False and self._supp and \
-                    ticks_diff(ticks_ms(), t_change) > dcms and clicks > 0 and self._ff:
+            if (
+                state is False
+                and self.state is False
+                and self._supp
+                and ticks_diff(ticks_ms(), t_change) > dcms
+                and clicks > 0
+                and self._ff
+            ):
                 clicks = 0
                 launch(self._ff, self._fa)
             elif state is True and self.state is True:

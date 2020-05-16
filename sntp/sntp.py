@@ -154,7 +154,7 @@ class SNTP:
     async def _poller(self):
         self._status = 0
         while True:
-            #print("\nperforming NTP query")
+            # print("\nperforming NTP query")
             try:
                 self.status = (self._status << 1) & 0xFFFF
                 (delay_us, step_us) = await self._poll()
@@ -186,18 +186,21 @@ class SNTP:
                 print_exception(e)
                 await asyncio.sleep(121)
 
+
 def start(mqtt, config):
     from utime import tzset
+
     tzset(config.pop("zone", "UTC+0"))
     ss = SNTP(**config)
     ss.start()
+
 
 if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG)
 
     async def runner():
-        ss = SNTP(host='192.168.0.1')
+        ss = SNTP(host="192.168.0.1")
         ss.start()
         while True:
             await asyncio.sleep(300)

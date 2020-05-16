@@ -2,12 +2,12 @@ import struct
 from modpcnt import *
 
 # Directions (PCNT_COUNT_* in components/driver/include/driver/pcnt.h)
-UP=1
-DOWN=2
+UP = 1
+DOWN = 2
 
 # Edges
-RISING=1
-FALLING=2
+RISING = 1
+FALLING = 2
 
 # Private constants
 _COUNT_DIS = 0
@@ -17,9 +17,12 @@ _MODE_KEEP = 0
 _MODE_REVERSE = 1
 _MODE_DISABLE = 2
 
+
 def _err_raise(err):
-    if err == 0: return
+    if err == 0:
+        return
     raise ValueError(esp_err_to_name(err))
+
 
 class Counter:
     def __init__(self, unit, pin, direction=UP, edge=RISING, limit=0, reset=True):
@@ -36,7 +39,7 @@ class Counter:
         # init config elements
         channel = 0
         pulse_gpio_num = self.pin
-        ctrl_gpio_num = -1 # not yet supported
+        ctrl_gpio_num = -1  # not yet supported
         counter_h_lim = 0
         counter_l_lim = 0
         pos_mode = _COUNT_DIS
@@ -46,30 +49,47 @@ class Counter:
         #
         self.dir_up = direction == UP
         self.edges = edge
-        if self.dir_up: mode = _COUNT_INC
-        else:           mode = _COUNT_DEC
+        if self.dir_up:
+            mode = _COUNT_INC
+        else:
+            mode = _COUNT_DEC
         # tweak config according to parameters
-        if edge & RISING: pos_mode = mode
-        if edge & FALLING: neg_mode = mode
+        if edge & RISING:
+            pos_mode = mode
+        if edge & FALLING:
+            neg_mode = mode
         self.limit = limit
-        if self.limit == 0: limit = 0x7ffff
+        if self.limit == 0:
+            limit = 0x7FFFF
         if self.dir_up:
             counter_h_lim = self.limit
         else:
             counter_l_lim = -self.limit
         # convert pcnt_config to C struct
-        struct_fmt = 'IIIIIIhhII'
-        #print(struct_fmt, pulse_gpio_num, ctrl_gpio_num,
+        struct_fmt = "IIIIIIhhII"
+        # print(struct_fmt, pulse_gpio_num, ctrl_gpio_num,
         #        lctrl_mode, hctrl_mode, pos_mode, neg_mode, counter_h_lim, counter_l_lim,
         #        self.unit, channel)
-        #print("sizeof:%d python:%d" % (pcnt_config_t, struct.calcsize(struct_fmt)))
+        # print("sizeof:%d python:%d" % (pcnt_config_t, struct.calcsize(struct_fmt)))
         assert pcnt_config_t == struct.calcsize(struct_fmt), "pcnt_config_t size mismatch"
         pcnt_config_struct = bytearray(struct.calcsize(struct_fmt))
-        struct.pack_into(struct_fmt, pcnt_config_struct, 0,
-                pulse_gpio_num, ctrl_gpio_num, lctrl_mode, hctrl_mode, pos_mode, neg_mode,
-                counter_h_lim, counter_l_lim, self.unit, channel)
+        struct.pack_into(
+            struct_fmt,
+            pcnt_config_struct,
+            0,
+            pulse_gpio_num,
+            ctrl_gpio_num,
+            lctrl_mode,
+            hctrl_mode,
+            pos_mode,
+            neg_mode,
+            counter_h_lim,
+            counter_l_lim,
+            self.unit,
+            channel,
+        )
         _err_raise(pcnt_unit_config(pcnt_config_struct))
-        _err_raise(pcnt_counter_resume(self.unit)) # apparently it starts paused...
+        _err_raise(pcnt_counter_resume(self.unit))  # apparently it starts paused...
         if reset:
             _err_raise(pcnt_counter_clear(self.unit))
 
@@ -99,9 +119,9 @@ class Counter:
             # GET value
             v_raw = bytearray(2)
             _err_raise(pcnt_get_counter_value(self.unit, v_raw))
-            v = struct.unpack('h', v_raw)
+            v = struct.unpack("h", v_raw)
             if not self.dir_up:
-                v[0] += self.limit # adjust to limit..0 interval
+                v[0] += self.limit  # adjust to limit..0 interval
             return v[0]
         else:
             # SET value
