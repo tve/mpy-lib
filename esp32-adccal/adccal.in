@@ -1,0 +1,6 @@
+i   driver/adc.h
+i   esp_adc_cal.h
+
+f   esp_err_to_name             I       s
+f   esp_adc_cal_characterize    IIIIP   I
+f   esp_adc_cal_raw_to_voltage  IP      I
