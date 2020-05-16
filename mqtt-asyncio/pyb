@@ -1,3 +1,0 @@
-#! /bin/bash
-#exec python3 /home/src/esp32/micropython/tools/pyboard.py --device /dev/serial/by-id/usb-Sil* "$@"
-exec python3 /home/src/esp32/micropython/tools/pyboard.py --device /dev/serial/by-id/usb-1a86* "$@"

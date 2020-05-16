@@ -1,4 +1,5 @@
 import struct
+from modpcnt import *
 
 # Directions (PCNT_COUNT_* in components/driver/include/driver/pcnt.h)
 UP=1
@@ -57,11 +58,14 @@ class Counter:
         else:
             counter_l_lim = -self.limit
         # convert pcnt_config to C struct
-        print('IIIIIIhhII', pulse_gpio_num, ctrl_gpio_num,
-                lctrl_mode, hctrl_mode, pos_mode, neg_mode, counter_h_lim, counter_l_lim,
-                self.unit, channel)
-        pcnt_config_struct = bytearray(struct.calcsize('IIIIIIhhII'))
-        struct.pack_into('IIIIIIhhII', pcnt_config_struct, 0,
+        struct_fmt = 'IIIIIIhhII'
+        #print(struct_fmt, pulse_gpio_num, ctrl_gpio_num,
+        #        lctrl_mode, hctrl_mode, pos_mode, neg_mode, counter_h_lim, counter_l_lim,
+        #        self.unit, channel)
+        #print("sizeof:%d python:%d" % (pcnt_config_t, struct.calcsize(struct_fmt)))
+        assert pcnt_config_t == struct.calcsize(struct_fmt), "pcnt_config_t size mismatch"
+        pcnt_config_struct = bytearray(struct.calcsize(struct_fmt))
+        struct.pack_into(struct_fmt, pcnt_config_struct, 0,
                 pulse_gpio_num, ctrl_gpio_num, lctrl_mode, hctrl_mode, pos_mode, neg_mode,
                 counter_h_lim, counter_l_lim, self.unit, channel)
         _err_raise(pcnt_unit_config(pcnt_config_struct))
@@ -75,6 +79,14 @@ class Counter:
         _err_raise(pcnt_set_pin(self.unit, self.channel, -1, -1))
         self.unit = -1
         self.pin = -1
+
+    def filter(self, microseconds):
+        if not microseconds:
+            _err_raise(pcnt_filter_disable(self.unit))
+            return
+        cyc = microseconds * 80  # APB clocks runs at 80Mhz
+        _err_raise(pcnt_set_filter_value(self.unit, cyc))
+        _err_raise(pcnt_filter_enable(self.unit))
 
     def resume(self):
         _err_raise(pcnt_unit_resume(self.unit))

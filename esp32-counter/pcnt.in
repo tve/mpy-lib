@@ -1,9 +1,15 @@
 i   driver/pcnt.h
 
-f   esp_err_to_name     I	s
-f   pcnt_unit_config	P	I
-f   pcnt_get_counter_value	IP	I
-f   pcnt_counter_pause	I	I
-f   pcnt_counter_resume	I	I
-f   pcnt_counter_clear	I	I
-f   pcnt_intr_disable	I	I
+f   esp_err_to_name             I       s
+f   pcnt_unit_config            P       I
+f   pcnt_get_counter_value      IP      I
+f   pcnt_counter_pause          I       I
+f   pcnt_counter_resume         I       I
+f   pcnt_counter_clear          I       I
+f   pcnt_intr_disable           I       I
+f   pcnt_filter_enable          I       I
+f   pcnt_filter_disable         I       I
+f   pcnt_set_filter_value       II      I
+f   pcnt_get_filter_value       IP      I
+
+z   pcnt_config_t
