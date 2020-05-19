@@ -191,18 +191,21 @@ def start(mqtt, config):
     from utime import tzset
 
     tzset(config.pop("zone", "UTC+0"))
-    ss = SNTP(**config)
-    ss.start()
 
-
-if __name__ == "__main__":
-
-    logging.basicConfig(level=logging.DEBUG)
-
-    async def runner():
-        ss = SNTP(host="192.168.0.1")
+    async def on_connect(mqclient):
+        ss = SNTP(**config)
         ss.start()
-        while True:
-            await asyncio.sleep(300)
+    mqtt.on_connect(on_connect)
 
-    asyncio.run(runner())
+
+# if __name__ == "__main__":
+#
+#     logging.basicConfig(level=logging.DEBUG)
+#
+#     async def runner():
+#         ss = SNTP(host="192.168.0.1")
+#         ss.start()
+#         while True:
+#             await asyncio.sleep(300)
+#
+#     asyncio.run(runner())
