@@ -2,11 +2,13 @@ import micropython, gc, time, uasyncio as asyncio, logging
 
 log = logging.getLogger(__name__)
 
-_upticks = None  # milliseconds of uptime
-_lastticks = None
-_mqttconn = 0
+_upticks = None  # milliseconds of uptime (becomes a bigint unlike time_ms())
+_lastticks = None  # helper to keep track of _upticks
+_mqttconn = 0  # number of MQTT connections
 
 
+# info_sender is a task (must be launched using create_task) that sends an MQTT info message
+# every interval seconds to the specified topic.
 async def info_sender(mqclient, topic, interval):
     global _upticks, _lastticks
     while True:
@@ -40,13 +42,11 @@ async def _on_mqtt(conn):
         _mqttconn += 1
 
 
+async def _on_init(mqclient, topic, interval):
+    asyncio.sleep(1)  # skip initial flurry of activity
+    asyncio.get_event_loop().create_task(info_sender(mqclient, topic, interval))
+
+
 def start(mqtt, config):
-    topic = config["topic"]
-    interval = config.get("interval", 60)  # interval in seconds
-
-    async def on_connect(mqclient):
-        asyncio.sleep(1)  # skip initial flurry of activity
-        asyncio.get_event_loop().create_task(info_sender(mqclient, topic, interval))
-
-    mqtt.on_connect(on_connect)
-    mqtt.on_wifi(_on_mqtt)
+    mqtt.on_init(_on_init(mqtt.client, config["topic"], config.get("interval", 60)))
+    mqtt.on_mqtt(_on_mqtt)

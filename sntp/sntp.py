@@ -76,7 +76,7 @@ class SNTP:
         self._poll_task = None
 
     def start(self):
-        self._poll_task = asyncio.Loop.create_task(self._poller())
+        self._poll_task = asyncio.get_event_loop().create_task(self._poller())
 
     async def stop(self):
         if self._poll_task is not None:
@@ -192,10 +192,10 @@ def start(mqtt, config):
 
     tzset(config.pop("zone", "UTC+0"))
 
-    async def on_connect(mqclient):
+    async def on_init(config):
         ss = SNTP(**config)
         ss.start()
-    mqtt.on_connect(on_connect)
+    mqtt.on_init(on_init(config))
 
 
 # if __name__ == "__main__":

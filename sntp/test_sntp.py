@@ -1,4 +1,4 @@
-# Test sntp.py using CPython
+# Test sntp.py using pytest with CPython
 # Copyright (c) 2020 by Thorsten von Eicken
 
 import pytest
