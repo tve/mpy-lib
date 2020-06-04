@@ -1,4 +1,5 @@
-import micropython, gc, time, uasyncio as asyncio, logging
+import micropython, gc, time, uasyncio as asyncio, logging, network
+from board import get_battery_voltage
 
 log = logging.getLogger(__name__)
 
@@ -11,28 +12,38 @@ _mqttconn = 0  # number of MQTT connections
 # every interval seconds to the specified topic.
 async def info_sender(mqclient, topic, interval):
     global _upticks, _lastticks
+    log.info(topic)
+    wlan_sta = network.WLAN(network.STA_IF)
     while True:
         try:
+            gc.collect()
             f = gc.mem_free()
             mf = gc.mem_maxfree()
             t = time.ticks_ms()
             if _upticks is None:
-                _upticks = t  # we hope is hasn't rolled-over yet...
+                _upticks = t  # we hope it hasn't rolled-over yet...
             else:
                 _upticks += time.ticks_diff(t, _lastticks)
             _lastticks = t
+            bv = get_battery_voltage()*1000
+            try:
+                rssi = wlan_sta.status("rssi")
+            except ValueError:
+                rssi = "null"
             # compose json message with data
-            msg = '{"up":%d,"free":%d,"cont_free":%d,"mqtt_conn":%d}' % (
+            msg = '{"up":%d,"free":%d,"cont_free":%d,"mqtt_conn":%d,"rssi":%s,"batt":%d}' % (
                 _upticks // 1000,
                 f,
                 mf,
                 _mqttconn,
+                rssi,
+                bv,
             )
             log.info(msg)
-            mqclient.publish(topic, msg, qos=0)
+            await mqclient.publish(topic, msg, qos=0)
             # micropython.mem_info()
         except Exception as e:
-            log.exc(e)
+            log.exc(e, "Exception")
         await asyncio.sleep(interval)
 
 
