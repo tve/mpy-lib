@@ -60,7 +60,7 @@ class Counter:
             neg_mode = mode
         self.limit = limit
         if self.limit == 0:
-            limit = 0x7FFFF
+            limit = 0x7FFF
         if self.dir_up:
             counter_h_lim = self.limit
         else:
