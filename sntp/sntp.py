@@ -1,5 +1,5 @@
 # Simple NTP daemon for MicroPython using asyncio.
-# Copyright (c) 2020 by Thorsten von Eicken
+# Copyright © 2020 by Thorsten von Eicken.
 # Based on https://github.com/wieck/micropython-ntpclient by Jan Wieck
 # See LICENSE file
 
