@@ -1,5 +1,12 @@
+# sysinfo.py - System information task transmitting basic telemetry via MQTT
+# Copyright © 2020 by Thorsten von Eicken.
 import micropython, gc, time, uasyncio as asyncio, logging, network
 from board import get_battery_voltage
+
+try:
+    from esp32 import idf_heap_info, HEAP_DATA
+except ImportError:
+    idf_heap_info = None
 
 log = logging.getLogger(__name__)
 
@@ -25,19 +32,23 @@ async def info_sender(mqclient, topic, interval):
             else:
                 _upticks += time.ticks_diff(t, _lastticks)
             _lastticks = t
-            bv = get_battery_voltage()*1000
+            bv = get_battery_voltage() * 1000
             try:
                 rssi = wlan_sta.status("rssi")
             except ValueError:
                 rssi = "null"
+            idf_f = 0  # esp-idf free bytes
+            idf_mf = 0  # esp-idf max contig free block
+            if idf_heap_info:
+                for mi in idf_heap_info(HEAP_DATA):
+                    idf_f += mi[1]  # sum free bytes
+                    if mi[2] > idf_mf:
+                        idf_mf = mi[2]  # max of contig free
             # compose json message with data
-            msg = '{"up":%d,"free":%d,"cont_free":%d,"mqtt_conn":%d,"rssi":%s,"batt":%d}' % (
-                _upticks // 1000,
-                f,
-                mf,
-                _mqttconn,
-                rssi,
-                bv,
+            msg = (
+                '{"up":%d,"free":%d,"cont_free":%d,"mqtt_conn":%d,"rssi":%s,"batt":%d,'
+                '"c_free":%d,"c_cont_free":%d}'
+                % (_upticks // 1000, f, mf, _mqttconn, rssi, bv, idf_f, idf_mf)
             )
             log.info(msg)
             await mqclient.publish(topic, msg, qos=0)
