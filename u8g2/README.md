@@ -1,5 +1,5 @@
-u8g2 for MicroPython
-====================
+u8g2 fonts for MicroPython
+==========================
 
 This library is a MicroPython port of the u8g2 font library. The u8g2 fonts are very
 compact allowing even large fonts to fit into the flash of a microcontroller. The decoding
