@@ -1,0 +1,2 @@
+#! /bin/bash
+for f in `find ../../u8g2/ -name \*luRS\*te.c`; do ./u8g2_convert.py <$f; done
