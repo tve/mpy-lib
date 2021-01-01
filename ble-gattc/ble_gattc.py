@@ -5,6 +5,10 @@ import ustruct as struct
 from micropython import const
 from uasyncio import sleep_ms, Event, Loop
 from ble_advertising import decode_services, decode_name
+import logging
+
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 # This module provides a high-level interface to GATT characteristics of a remote device, such as
 # a sensor. The way it works is that when BLEGATTC is instantiated a list of UUIDS for GATT
@@ -108,10 +112,10 @@ class BLECharacteristic:
             gattc = self._gattc
             e = gattc._add_pending(self._value_handle)
             vh = self.descriptors[self.CCC_UUID]._value_handle
-            gattc._ble.gattc_write(gattc._conn_handle, vh, b'\x01\x00', 0)
+            gattc._ble.gattc_write(gattc._conn_handle, vh, b"\x01\x00", 0)
             return e.get  # returning the method itself
         else:
-            print("No CCC descriptor?", self.descriptors)
+            log.warning("No CCC descriptor? %s", self.descriptors)
             raise OSError(errno.ENOENT)
 
 
@@ -170,6 +174,7 @@ class BLEGATTC:
 
         self._reset()
 
+    # _reset is a helper to reset the state of the connection and info about the connected device.
     def _reset(self, error=None):
         # Info about sensor device
         self._name = None  # name of device/service we find
@@ -204,7 +209,7 @@ class BLEGATTC:
                 sh = svc._start_handle
                 eh = svc._end_handle
                 self._cur_svc = uuid
-                print("Discovering service", uuid)
+                log.debug("Discovering service %s", uuid)
                 self._ble.gattc_discover_characteristics(self._conn_handle, sh, eh)
                 return True
 
@@ -232,7 +237,7 @@ class BLEGATTC:
     def _connect(self, addr_type=None, addr=None):
         self._addr_type = addr_type or self._addr_type
         self._addr = addr or self._addr
-        print("Connecting to", binascii.hexlify(self._addr, ":").decode("ascii"))
+        log.info("Connecting to %s", binascii.hexlify(self._addr, ":").decode("ascii"))
         self._ble.gap_connect(self._addr_type, self._addr)
 
     # _irq is the callback invoked by BLE when a response comes in, it's a big switch statement to
@@ -241,13 +246,13 @@ class BLEGATTC:
     # Note that the `data` tuple may contain references that point into a transient byte array and
     # thus anything that is not a primitive value has to be copied if it's saved away.
     def _irq(self, event, data):
-        #print("IRQ", event)
+        # print("IRQ", event)
         if event == _IRQ_SCAN_RESULT:
             addr_type, addr, adv_type, rssi, adv_data = data
             if adv_type in (_ADV_IND, _ADV_DIRECT_IND):  # magic??
                 name = decode_name(adv_data)
                 services = decode_services(adv_data)
-                print("Scan found", name, services)
+                log.debug("Scan found '%s', svcs: %s", name, services)
                 # ask the filter callback whether this is our device
                 if self._filter_callback(addr_type, addr, name, services):
                     # looks like we found something...
@@ -259,18 +264,18 @@ class BLEGATTC:
         elif event == _IRQ_SCAN_DONE:
             if self._addr:
                 # Found a device during the scan.
-                print("Scan done, found device")
+                log.debug("Found device, ending scan")
                 self._connect()  # connect to the device found
             else:
                 # Scan timed out.
-                print("Scan done, timed-out")
+                log.info("Scan timed-out")
                 self._reset(OSError(errno.ETIMEDOUT))
 
         elif event == _IRQ_PERIPHERAL_CONNECT:
             # Connect successful.
             conn_handle, addr_type, addr = data
             if addr_type == self._addr_type and addr == self._addr:
-                print("Connected", data)
+                log.debug("Connected %s", data)
                 self._conn_handle = conn_handle
                 self._ble.gattc_discover_services(self._conn_handle)  # start services discovery
 
@@ -279,12 +284,12 @@ class BLEGATTC:
             conn_handle, _, _ = data
             if conn_handle == self._conn_handle:
                 # Not reset by us.
-                self._reset(OSError(errno.EV_CONNABORTED))
+                self._reset(OSError(errno.ECONNABORTED))
 
         elif event == _IRQ_GATTC_SERVICE_RESULT:
             # Connected device returned a service.
             conn_handle, start_handle, end_handle, uuid = data
-            print("Found service:", data)
+            log.debug("Found service: %s", data)
             if conn_handle == self._conn_handle and uuid in self._svc_uuids:
                 # That's a service we need to pay attention to.
                 self.services[bluetooth.UUID(uuid)] = BLEService(start_handle, end_handle)
@@ -295,9 +300,11 @@ class BLEGATTC:
             if conn_handle != self._conn_handle:
                 return
             # Start querying for characteristics.
-            print("Found %d services, %d to discover" % (len(self.services), len(self._svc_uuids)))
+            log.debug(
+                "Found %d services, %d to discover", len(self.services), len(self._svc_uuids)
+            )
             if not self._discover_chars():
-                print("No services to discover?")
+                log.warning("No services to discover?")
                 self._reset(OSError(errno.ENOENT))
 
         elif event == _IRQ_GATTC_CHARACTERISTIC_RESULT:
@@ -305,7 +312,7 @@ class BLEGATTC:
             conn_handle, def_handle, value_handle, properties, uuid = data
             if conn_handle != self._conn_handle:
                 return
-            print("Found char:", data)
+            log.debug("Found char: %d", data)
             uuid = bluetooth.UUID(uuid)  # make copy.
             char = BLECharacteristic(self, def_handle, value_handle, properties)
             svc = self.services[self._cur_svc]
@@ -328,9 +335,9 @@ class BLEGATTC:
             # Query for char's of other services
             if not self._discover_chars():
                 # Start querying for descriptors.
-                print("Dicovering dscs for %d chars" % len(self._char_list))
+                log.debug("Dicovering dscs for %d chars", len(self._char_list))
                 if not self._discover_dscs():
-                    print("Done with discovery")
+                    log.info("Done with discovery")
                     self._cur_svc = None
                     self._cur_char = None
                     self._ready = True
@@ -341,7 +348,7 @@ class BLEGATTC:
             conn_handle, value_handle, uuid = data
             if conn_handle != self._conn_handle:
                 return
-            print("Descriptor:", data)
+            log.debug("Descriptor: %s", data)
             uuid = bluetooth.UUID(uuid)  # make copy.
             dsc = BLEDescriptor(conn_handle, value_handle)
             self._cur_char.descriptors[uuid] = dsc
@@ -353,7 +360,7 @@ class BLEGATTC:
                 return
             # Continue querying for descriptors.
             if not self._discover_dscs():
-                print("Done with discovery")
+                log.info("Done with discovery")
                 self._cur_svc = None
                 self._cur_char = None
                 self._ready = True
@@ -394,13 +401,13 @@ class BLEGATTC:
     # The callback should return True if the device is the one to use and False if scanning
     # should continue.
     # scan returns a (name, addr_type, addr) tuple for the connected device.
-    async def scan(self, filter_cb):
+    async def scan(self, filter_cb, duration_ms=60000):
         # TODO: raise error if we're already scanning, connected, etc...
         self._filter_callback = filter_cb
         e = self._add_pending(self.EV_CONN)
         self._addr_type = None
         self._addr = None
-        self._ble.gap_scan(2000, 30000, 30000)
+        self._ble.gap_scan(duration_ms*1000, 73000, 11250)  # dur, interval, window, all in µsecs
         await e.get()  # TODO: discard status?
         return (self._name, self._addr_type, self._addr)
 
@@ -425,82 +432,81 @@ class BLEGATTC:
         return s
 
 
-async def demo():
-    BLE_HR_UUID = bluetooth.UUID(0x180D)
-    BLE_HR_LOC_UUID = bluetooth.UUID(0x2A38)
-    BLE_HR_MEAS_UUID = bluetooth.UUID(0x2A37)
-    BLE_BATTERY_UUID = bluetooth.UUID(0x180F)
-    BLE_BATTERY_LEVEL_UUID = bluetooth.UUID(0x2A19)
-
-    ble = bluetooth.BLE()
-    hr_sensor = BLEGATTC(ble, [BLE_HR_UUID, BLE_BATTERY_UUID])
-
-    def scan_filter(addr_type, addr, name, services):
-        return BLE_HR_UUID in services
-
-    while True:
-        print("Scanning...")
-        try:
-            name, addr_type, addr = await hr_sensor.scan(scan_filter)
-        except OSError as e:
-            print("Scanning failed (%s), retrying!" % e)
-            await sleep_ms(500)
-            continue
-        addr = binascii.hexlify(addr, ":").decode("ascii")
-        print("Found '%s' at %s" % (name, addr))
-
-        try:
-            # read battery level
-            batt = hr_sensor.find(BLE_BATTERY_UUID, BLE_BATTERY_LEVEL_UUID)
-            if batt:
-                print("Connected, reading battery level")
-                val = await batt.read()
-                val = struct.unpack("<b", val)[0]
-                print("Battery level: %d%%" % val)
-            else:
-                print("Connected, cannot read battery level")
-
-            # read heart rate sensor type
-            hr_loc = hr_sensor.find(BLE_HR_UUID, BLE_HR_LOC_UUID)
-            if hr_loc:
-                val = await hr_loc.read()
-                val = struct.unpack("<b", val)[0]  # TODO: not meaningful...
-                print("HR sensor location:", val)
-            else:
-                print("HR sensor location unavailable")
-
-            # subscribe to HR measurements
-            hr_meas = hr_sensor.find(BLE_HR_UUID, BLE_HR_MEAS_UUID)
-            if hr_meas:
-                hrm_q = hr_meas.subscribe()
-                print("Subscribed to HR measurements")
-            else:
-                print("HR sensor measurements unavailable")
-                hr_sensor.terminate()
-                await sleep_ms(5000)
-                continue  # try our luck yet again?
-
-            while True:
-                val = await hrm_q()
-                print(val)
-                if val[0] & 1:
-                    hr = struct.unpack("<H", val[1:3])[0]
-                else:
-                    hr = struct.unpack("<B", val[1:2])[0]
-                print("HR measurement: %dbpm (0x%02x)" % (hr, val[0]))
-
-        except OSError as e:
-            print("Sensor connection failed:", e, "- reconnecting...")
-            hr_sensor.terminate()
-            sleep_ms(500)
-
-
-# Dummy task needed to keep the asyncio loop going in v1.13!?
-async def ticker():
-    while True:
-        await sleep_ms(100)
-
-
 if __name__ == "__main__":
+
+    async def demo():
+        BLE_HR_UUID = bluetooth.UUID(0x180D)
+        BLE_HR_LOC_UUID = bluetooth.UUID(0x2A38)
+        BLE_HR_MEAS_UUID = bluetooth.UUID(0x2A37)
+        BLE_BATTERY_UUID = bluetooth.UUID(0x180F)
+        BLE_BATTERY_LEVEL_UUID = bluetooth.UUID(0x2A19)
+
+        ble = bluetooth.BLE()
+        hr_sensor = BLEGATTC(ble, [BLE_HR_UUID, BLE_BATTERY_UUID])
+
+        def scan_filter(addr_type, addr, name, services):
+            return BLE_HR_UUID in services
+
+        while True:
+            print("Scanning...")
+            try:
+                name, addr_type, addr = await hr_sensor.scan(scan_filter)
+            except OSError as e:
+                print("Scanning failed (%s), retrying!" % e)
+                await sleep_ms(500)
+                continue
+            addr = binascii.hexlify(addr, ":").decode("ascii")
+            print("Found '%s' at %s" % (name, addr))
+
+            try:
+                # read battery level
+                batt = hr_sensor.find(BLE_BATTERY_UUID, BLE_BATTERY_LEVEL_UUID)
+                if batt:
+                    print("Connected, reading battery level")
+                    val = await batt.read()
+                    val = struct.unpack("<b", val)[0]
+                    print("Battery level: %d%%" % val)
+                else:
+                    print("Connected, cannot read battery level")
+
+                # read heart rate sensor type
+                hr_loc = hr_sensor.find(BLE_HR_UUID, BLE_HR_LOC_UUID)
+                if hr_loc:
+                    val = await hr_loc.read()
+                    val = struct.unpack("<b", val)[0]  # TODO: not meaningful...
+                    print("HR sensor location:", val)
+                else:
+                    print("HR sensor location unavailable")
+
+                # subscribe to HR measurements
+                hr_meas = hr_sensor.find(BLE_HR_UUID, BLE_HR_MEAS_UUID)
+                if hr_meas:
+                    hrm_q = hr_meas.subscribe()
+                    print("Subscribed to HR measurements")
+                else:
+                    print("HR sensor measurements unavailable")
+                    hr_sensor.terminate()
+                    await sleep_ms(5000)
+                    continue  # try our luck yet again?
+
+                while True:
+                    val = await hrm_q()
+                    print(val)
+                    if val[0] & 1:
+                        hr = struct.unpack("<H", val[1:3])[0]
+                    else:
+                        hr = struct.unpack("<B", val[1:2])[0]
+                    print("HR measurement: %dbpm (0x%02x)" % (hr, val[0]))
+
+            except OSError as e:
+                print("Sensor connection failed:", e, "- reconnecting...")
+                hr_sensor.terminate()
+                sleep_ms(500)
+
+    # Dummy task needed to keep the asyncio loop going in v1.13!?
+    async def ticker():
+        while True:
+            await sleep_ms(100000)
+
     Loop.create_task(ticker())
     Loop.run_until_complete(demo())
