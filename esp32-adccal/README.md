@@ -7,9 +7,9 @@ and it works in conjunction with the standard `machine.ADC` module.
 
 From a practical standpoint most ESP32's in use today have a factory calibration of the reference
 voltage burned into eFuse. This means that the corection performed by this module takes that
-into account. To obtain higher accuracy the use must perform a two-point calibration at 150mV and
-850mV and burn the result into a eFuse. Agin, the correction performed by this module takes a
-two-point calibration into account, however, this module does not provide a way to
+into account. To obtain higher accuracy the user must perform a two-point calibration at 150mV and
+850mV and burn the result into a eFuse. The correction performed by this module takes such a
+two-point calibration into account, but, this module does not provide a way to
 perform the calibration and eFuse burning itself.
 
 Constructor
