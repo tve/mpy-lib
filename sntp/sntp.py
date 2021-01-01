@@ -159,12 +159,15 @@ class SNTP:
                 self.status = (self._status << 1) & 0xFFFF
                 (delay_us, step_us) = await self._poll()
                 if step_us > self._max_step or -step_us > self._max_step:
+                    # large adjustment: step the clock, don't slew
                     # print(time.localtime())
                     (tgt_s, tgt_us) = divmod(time.time_us() + step_us, 1000000)
                     log.warning("stepping to %s", time.localtime(tgt_s))
                     settime(tgt_s, tgt_us)
                     # print(time.localtime())
-                else:
+                # if the adjustment is too small WRT round-trip delay, it's likely not to be
+                # very good and result in lots of noise, so skip
+                elif step_us > 2*delay_us or -step_us > 2*delay_us:
                     lvl = logging.DEBUG if abs(step_us) < 10000 else logging.INFO
                     log.log(lvl, "adjusting by %dus (delay=%dus)", step_us, delay_us)
                     adjtime(step_us)
