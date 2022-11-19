@@ -1,11 +1,13 @@
 # Location of top-level MicroPython directory
-MPY_DIR = /home/src/esp32/micropython
+#MPY_DIR = /home/src/esp32/micropython
+MPY_DIR = /home/src/esp32/mpy-1.13/micropython
+MPY_VER = 1.13
 
 # Location of C stub generator
 GENSTUB = ../genstub/genstub.py
 
 # Name of module
-MOD = modpcnt
+MOD = modpcnt-$(MPY_VER)
 
 # Source files (.c or .py)
 SRC = modpcnt.c
@@ -16,7 +18,8 @@ ARCH = xtensawin
 PORT = esp32
 
 # Espressif ESP-IDF path
-IDF_PATH := $(abspath $(MPY_DIR)/../esp-idf-micropython)
+#IDF_PATH := $(abspath $(MPY_DIR)/../esp-idf-micropython)
+IDF_PATH := $(abspath $(MPY_DIR)/../esp-idf)
 # Board to get correct ESP-IDF config
 BOARD := GENERIC
 # xtensa toolchain bin dir

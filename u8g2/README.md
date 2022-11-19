@@ -34,8 +34,17 @@ The most commonly used functions of the `Font` class are:
   are returned.
 
 The `draw_glyph` method is at the core of the library. It decodes a glyph and renders it in one
-step. On the one hand This function is relatively fast, on the other it could be faster... The first
+step. On the one hand this function is relatively fast, on the other it could be faster... The first
 place to optimize is to provide a fast `hline` function. The next is to (manually) inline the
-`hline` function into `draw_glyph`, although this only really makes sense if the picel format is
+`hline` function into `draw_glyph`, although this only really makes sense if the pixel format is
 simple, such as 8 bits per pixel. At some point it probably makes sense to code-up a C version of
 `draw_glyph`...
+
+Convert a TTF font to u8g2
+--------------------------
+
+To create a u8g2 version of a TTF font:
+- dunno how I generated Logisoso u8g2 fonts (argh)
+- try to use otf2bdf in u8g2 repo, then bdfconv...
+- can also try fontforge GUI app, use `Elements>BitmapStrikes` to define sizes,
+  then `File>Generate` to actually generate BDF

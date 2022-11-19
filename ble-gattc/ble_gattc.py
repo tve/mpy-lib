@@ -184,6 +184,7 @@ class BLEGATTC:
         # Events.
         if error:
             for _, e in self._pending.items():
+                log.debug("Signaling pending error")
                 e.signal(error)
         self._pending = {}  # pending async events
         self._filter_callback = None  # used during scanning to filter devices found
@@ -246,96 +247,128 @@ class BLEGATTC:
     # Note that the `data` tuple may contain references that point into a transient byte array and
     # thus anything that is not a primitive value has to be copied if it's saved away.
     def _irq(self, event, data):
-        # print("IRQ", event)
-        if event == _IRQ_SCAN_RESULT:
-            addr_type, addr, adv_type, rssi, adv_data = data
-            if adv_type in (_ADV_IND, _ADV_DIRECT_IND):  # magic??
-                name = decode_name(adv_data)
-                services = decode_services(adv_data)
-                log.debug("Scan found '%s', svcs: %s", name, services)
-                # ask the filter callback whether this is our device
-                if self._filter_callback(addr_type, addr, name, services):
-                    # looks like we found something...
-                    self._addr_type = addr_type  # 0=public, 1=randomized
-                    self._addr = bytes(addr)  # addr buffer is owned by caller: need to copy it.
-                    self._name = decode_name(adv_data) or "?"  # decode_name makes a copy
-                    self._ble.gap_scan(None)  # stop scanning
+        # wrap the whole thing into a try block so we can log exceptions (otherwise they
+        # just get print()'ed..
+        try:
+            # if event != _IRQ_GATTC_NOTIFY:
+            #    log.debug("IRQ %s", event)
+            if event == _IRQ_SCAN_RESULT:
+                addr_type, addr, adv_type, rssi, adv_data = data
+                if adv_type in (_ADV_IND, _ADV_DIRECT_IND):  # magic??
+                    name = decode_name(adv_data)
+                    services = decode_services(adv_data)
+                    log.debug("Scan found '%s', svcs: %s", name, services)
+                    # ask the filter callback whether this is our device
+                    if self._filter_callback(addr_type, addr, name, services):
+                        # looks like we found something...
+                        self._addr_type = addr_type  # 0=public, 1=randomized
+                        self._addr = bytes(
+                            addr
+                        )  # addr buffer is owned by caller: need to copy it.
+                        self._name = decode_name(adv_data) or "?"  # decode_name makes a copy
+                        self._ble.gap_scan(None)  # stop scanning
 
-        elif event == _IRQ_SCAN_DONE:
-            if self._addr:
-                # Found a device during the scan.
-                log.debug("Found device, ending scan")
-                self._connect()  # connect to the device found
-            else:
-                # Scan timed out.
-                log.info("Scan timed-out")
-                self._reset(OSError(errno.ETIMEDOUT))
+            elif event == _IRQ_SCAN_DONE:
+                if self._addr:
+                    # Found a device during the scan.
+                    log.debug("Found device, ending scan")
+                    self._connect()  # connect to the device found
+                else:
+                    # Scan timed out.
+                    log.info("Scan timed-out")
+                    self._reset(OSError(errno.ETIMEDOUT))
 
-        elif event == _IRQ_PERIPHERAL_CONNECT:
-            # Connect successful.
-            conn_handle, addr_type, addr = data
-            if addr_type == self._addr_type and addr == self._addr:
-                log.debug("Connected %s", data)
-                self._conn_handle = conn_handle
-                self._ble.gattc_discover_services(self._conn_handle)  # start services discovery
+            elif event == _IRQ_PERIPHERAL_CONNECT:
+                # Connect successful.
+                conn_handle, addr_type, addr = data
+                if addr_type == self._addr_type and addr == self._addr:
+                    log.debug("Connected %s", data)
+                    self._conn_handle = conn_handle
+                    self._ble.gattc_discover_services(
+                        self._conn_handle
+                    )  # start services discovery
 
-        elif event == _IRQ_PERIPHERAL_DISCONNECT:
-            # Disconnect (either initiated by us or the remote end).
-            conn_handle, _, _ = data
-            if conn_handle == self._conn_handle:
-                # Not reset by us.
-                self._reset(OSError(errno.ECONNABORTED))
+            elif event == _IRQ_PERIPHERAL_DISCONNECT:
+                # Disconnect (either initiated by us or the remote end).
+                conn_handle, _, _ = data
+                if self._conn_handle is None or conn_handle == self._conn_handle:
+                    # self._conn_handle is None happens if disconnected during connect process
+                    # Not reset by us, so record the reset.
+                    self._reset(OSError(errno.ECONNABORTED))
 
-        elif event == _IRQ_GATTC_SERVICE_RESULT:
-            # Connected device returned a service.
-            conn_handle, start_handle, end_handle, uuid = data
-            log.debug("Found service: %s", data)
-            if conn_handle == self._conn_handle and uuid in self._svc_uuids:
-                # That's a service we need to pay attention to.
-                self.services[bluetooth.UUID(uuid)] = BLEService(start_handle, end_handle)
+            elif event == _IRQ_GATTC_SERVICE_RESULT:
+                # Connected device returned a service.
+                conn_handle, start_handle, end_handle, uuid = data
+                log.debug("Found service: %s", data)
+                if conn_handle == self._conn_handle and uuid in self._svc_uuids:
+                    # That's a service we need to pay attention to.
+                    self.services[bluetooth.UUID(uuid)] = BLEService(start_handle, end_handle)
 
-        elif event == _IRQ_GATTC_SERVICE_DONE:
-            # Service query complete, fetch characteristics of the services we're looking for.
-            conn_handle, status = data
-            if conn_handle != self._conn_handle:
-                return
-            # Start querying for characteristics.
-            log.debug(
-                "Found %d services, %d to discover", len(self.services), len(self._svc_uuids)
-            )
-            if not self._discover_chars():
-                log.warning("No services to discover?")
-                self._reset(OSError(errno.ENOENT))
+            elif event == _IRQ_GATTC_SERVICE_DONE:
+                # Service query complete, fetch characteristics of the services we're looking for.
+                conn_handle, status = data
+                if conn_handle != self._conn_handle:
+                    return
+                # Start querying for characteristics.
+                log.debug(
+                    "Found %d services, %d to discover", len(self.services), len(self._svc_uuids)
+                )
+                if not self._discover_chars():
+                    log.warning("No services to discover?")
+                    self._reset(OSError(errno.ENOENT))
 
-        elif event == _IRQ_GATTC_CHARACTERISTIC_RESULT:
-            # Connected device returned a characteristic.
-            conn_handle, def_handle, value_handle, properties, uuid = data
-            if conn_handle != self._conn_handle:
-                return
-            log.debug("Found char: %d", data)
-            uuid = bluetooth.UUID(uuid)  # make copy.
-            char = BLECharacteristic(self, def_handle, value_handle, properties)
-            svc = self.services[self._cur_svc]
-            svc.chars[uuid] = char
-            self._char_list.append(char)  # queue to discover descriptors
-            # fix up end_handle of previous char (yuck!!)
-            if self._prev_char:
-                self._prev_char._end_handle = def_handle - 1
-            self._prev_char = char
+            elif event == _IRQ_GATTC_CHARACTERISTIC_RESULT:
+                # Connected device returned a characteristic.
+                conn_handle, def_handle, value_handle, properties, uuid = data
+                if conn_handle != self._conn_handle:
+                    return
+                log.debug("Found char: %s", data)
+                uuid = bluetooth.UUID(uuid)  # make copy.
+                char = BLECharacteristic(self, def_handle, value_handle, properties)
+                svc = self.services[self._cur_svc]
+                svc.chars[uuid] = char
+                self._char_list.append(char)  # queue to discover descriptors
+                # fix up end_handle of previous char (yuck!!)
+                if self._prev_char:
+                    self._prev_char._end_handle = def_handle - 1
+                self._prev_char = char
 
-        elif event == _IRQ_GATTC_CHARACTERISTIC_DONE:
-            # Characteristic query complete, see whether we need to query for more.
-            conn_handle, status = data
-            if conn_handle != self._conn_handle:
-                return
-            # fix up end_handle of last char (yuck!!)
-            if self._prev_char:
-                self._prev_char._end_handle = self.services[self._cur_svc]._end_handle
-            self._prev_char = None
-            # Query for char's of other services
-            if not self._discover_chars():
-                # Start querying for descriptors.
-                log.debug("Dicovering dscs for %d chars", len(self._char_list))
+            elif event == _IRQ_GATTC_CHARACTERISTIC_DONE:
+                # Characteristic query complete, see whether we need to query for more.
+                conn_handle, status = data
+                if conn_handle != self._conn_handle:
+                    return
+                # fix up end_handle of last char (yuck!!)
+                if self._prev_char:
+                    self._prev_char._end_handle = self.services[self._cur_svc]._end_handle
+                self._prev_char = None
+                # Query for char's of other services
+                if not self._discover_chars():
+                    # Start querying for descriptors.
+                    log.debug("Discovering dscs for %d chars", len(self._char_list))
+                    if not self._discover_dscs():
+                        log.info("Done with discovery")
+                        self._cur_svc = None
+                        self._cur_char = None
+                        self._ready = True
+                        self._pending[self.EV_CONN].signal(status)  # TODO: what's status?
+
+            elif event == _IRQ_GATTC_DESCRIPTOR_RESULT:
+                # Connected device returned a descriptor.
+                conn_handle, value_handle, uuid = data
+                if conn_handle != self._conn_handle:
+                    return
+                log.debug("Descriptor: %s", data)
+                uuid = bluetooth.UUID(uuid)  # make copy.
+                dsc = BLEDescriptor(conn_handle, value_handle)
+                self._cur_char.descriptors[uuid] = dsc
+
+            elif event == _IRQ_GATTC_DESCRIPTOR_DONE:
+                # Descriptor query complete, see whether we need to query for more.
+                conn_handle, status = data
+                if conn_handle != self._conn_handle:
+                    return
+                # Continue querying for descriptors.
                 if not self._discover_dscs():
                     log.info("Done with discovery")
                     self._cur_svc = None
@@ -343,46 +376,32 @@ class BLEGATTC:
                     self._ready = True
                     self._pending[self.EV_CONN].signal(status)  # TODO: what's status?
 
-        elif event == _IRQ_GATTC_DESCRIPTOR_RESULT:
-            # Connected device returned a descriptor.
-            conn_handle, value_handle, uuid = data
-            if conn_handle != self._conn_handle:
-                return
-            log.debug("Descriptor: %s", data)
-            uuid = bluetooth.UUID(uuid)  # make copy.
-            dsc = BLEDescriptor(conn_handle, value_handle)
-            self._cur_char.descriptors[uuid] = dsc
+            elif event == _IRQ_GATTC_READ_RESULT:
+                # A read completed successfully.
+                conn_handle, value_handle, char_data = data
+                if conn_handle == self._conn_handle:
+                    self._pending[value_handle].signal(char_data)
+                    del self._pending[value_handle]
 
-        elif event == _IRQ_GATTC_DESCRIPTOR_DONE:
-            # Descriptor query complete, see whether we need to query for more.
-            conn_handle, status = data
-            if conn_handle != self._conn_handle:
-                return
-            # Continue querying for descriptors.
-            if not self._discover_dscs():
-                log.info("Done with discovery")
-                self._cur_svc = None
-                self._cur_char = None
-                self._ready = True
-                self._pending[self.EV_CONN].signal(status)  # TODO: what's status?
+            elif event == _IRQ_GATTC_WRITE_DONE:
+                conn_handle, value_handle, status = data
+                if conn_handle == self._conn_handle:
+                    self._pending[value_handle].signal(status)  # TODO: what's status?
+                    del self._pending[value_handle]
 
-        elif event == _IRQ_GATTC_READ_RESULT:
-            # A read completed successfully.
-            conn_handle, value_handle, char_data = data
-            if conn_handle == self._conn_handle:
-                self._pending[value_handle].signal(char_data)
-                del self._pending[value_handle]
+            elif event == _IRQ_GATTC_NOTIFY:
+                conn_handle, value_handle, notify_data = data
+                if conn_handle == self._conn_handle:
+                    self._pending[value_handle].signal(notify_data)
 
-        elif event == _IRQ_GATTC_WRITE_DONE:
-            conn_handle, value_handle, status = data
-            if conn_handle == self._conn_handle:
-                self._pending[value_handle].signal(status)  # TODO: what's status?
-                del self._pending[value_handle]
+            else:
+                log.debug("IRQ %s", event)
 
-        elif event == _IRQ_GATTC_NOTIFY:
-            conn_handle, value_handle, notify_data = data
-            if conn_handle == self._conn_handle:
-                self._pending[value_handle].signal(notify_data)
+        except OSError as e:
+            log.exc(e, "In BLE GATTC IRQ handler")
+            log.error("%d -> %s", uerrno.errorcode.get(-e.args[0], "?"))
+        except Exception as e:
+            log.exc(e, "In BLE GATTC IRQ handler")
 
     # is_connected returns True iff there is an active connection to a device and the discovery
     # process has completed, i.e. the device is usable.
@@ -407,18 +426,22 @@ class BLEGATTC:
         e = self._add_pending(self.EV_CONN)
         self._addr_type = None
         self._addr = None
-        self._ble.gap_scan(duration_ms*1000, 73000, 11250)  # dur, interval, window, all in µsecs
+        log.debug("Starting scan for %ds", duration_ms // 1000)
+        self._ble.gap_scan(duration_ms, 73000, 11250)  # dur in ms, interval in µs, window µs
         await e.get()  # TODO: discard status?
         return (self._name, self._addr_type, self._addr)
 
-    # Terminate disconnects from any device and terminates any pending operations.
+    # Terminate disconnects from any device, terminates any pending operations, and turns
+    # BLE off (FIXME: what if there are multiple BLEGATTC active?).
+    # The BLEGATTC object becomes unusable after this: instantiate a fesh one...
     def terminate(self):
-        if not self._conn_handle:
-            return  # already terminated
-        ch = self._conn_handle
-        self._conn_handle = None
-        self._ble.gap_disconnect(ch)
+        if self._conn_handle:
+            ch = self._conn_handle
+            self._conn_handle = None
+            self._ble.gap_disconnect(ch)
         self._reset(OSError(errno.ENOTCONN))
+        self._ble.active(False)
+        del self._ble  # prevent re-use attempts
 
     # find a service, or characteristic, or descriptor based on a path of UUIDs.
     # Returns None if not found.

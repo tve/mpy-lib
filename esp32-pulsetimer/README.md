@@ -3,7 +3,8 @@ ESP32 Pulse Timer
 
 This module exposes a simple function `set_time_handler` that changes the hard interrupt handler
 on a gpio pin to one that calls a python function ("soft IRQ handler") with the time of the
-interrupt instead of the Pin object that is passed when using `machine.Pin.isr` callback.
+interrupt in milliseconds (i.e. same value as `time.ticks_ms()` would return).
+This is instead of the `Pin` object that is passed when using `machine.Pin.isr`.
 This enables simple timing of (relatively infrequent) pulse edges.
 
 Example:
@@ -17,5 +18,5 @@ pulsetimer.set_time_handler(in_pin, pulse)  # change IRQ handler
 ```
 
 This implementation relies on having a soft-IRQ queue in MicroPython and ultimately in being able to
-run the python handlers faster than the interrupts are coming in. An better imlpementation might be
+run the python handlers faster than the interrupts are coming in. A better imlpementation might be
 to have a circular queue of times in C and provide a way to retrieve that from python.

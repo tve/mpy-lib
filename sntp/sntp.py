@@ -163,6 +163,7 @@ class SNTP:
                     # print(time.localtime())
                     (tgt_s, tgt_us) = divmod(time.time_us() + step_us, 1000000)
                     log.warning("stepping to %s", time.localtime(tgt_s))
+                    logging._hour_ticks = None  # hack to get logging to re-cache localtime
                     settime(tgt_s, tgt_us)
                     # print(time.localtime())
                 # if the adjustment is too small WRT round-trip delay, it's likely not to be
